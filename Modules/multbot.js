@@ -35,7 +35,7 @@ var MultBot = class {
         this.autoSpells          = this._safeInit('AutoSpells', () => new AutoSpells(this.console, this.storage));
         this.autoResearch       = this._safeInit('AutoResearch', () => new AutoResearch(this.console, this.storage));
         this.autoSendResources  = this._safeInit('AutoSendResources', () => new AutoSendResources(this.console, this.storage));
-        this.autoFestival       = this._safeInit('AutoFestival', () => new AutoFestival(this.console, this.storage));  // 👈 NOVO
+        this.autoFestival       = this._safeInit('AutoFestival', () => new AutoFestival(this.console, this.storage));
         this.statusPanel        = this._safeInit('StatusPanel', () => new StatusPanel(this.console, this.storage));
 
         this.settingsFactory = this._safeInit('SettingsWindow', () => new createGrepoWindow({
@@ -54,10 +54,10 @@ var MultBot = class {
                     render: this.settingsFarm,
                 },
                 {
-                    title: 'Recur/Fest',          // 👈 NOVO
-                    id: 'festival',               // 👈 NOVO
-                    render: this.settingsFestival,// 👈 NOVO
-                },                                // 👈 NOVO
+                    title: 'Recur/Fest',
+                    id: 'festival',
+                    render: this.settingsFestival,
+                },
                 {
                     title: multT('tab_build'),
                     id: 'build',
@@ -136,7 +136,7 @@ var MultBot = class {
         return html;
     };
 
-    // 👈 NOVO — render da aba "Recur/Fest"
+    // render da aba "Recur/Fest"
     settingsFestival = () => {
         let html = '';
         html += this.autoFestival ? this.autoFestival.settings() : this._missingModuleHtml('Auto Festival');
@@ -219,12 +219,11 @@ var MultBot = class {
     setup = () => {
         if (this.settingsFactory) this.settingsFactory.activate();
 
+        // 👈 ALTERADO — botão do menu com "N" branca a negrito em vez da imagem (que dava 404)
         uw.$('.gods_area_buttons').append(`
             <div class='circle_button mult_bot_settings' onclick='window.multBot.settingsFactory.openWindow()'>
-                <div style='width: 27px; height: 27px; display:flex; align-items:center; justify-content:center;' class='icon js-caption' title='MultBot'>
-                    <img src="https://github.com/NotXina.png?size=64" width="23" height="23"
-                         style="display:block; box-sizing:border-box; border-radius:50%; object-fit:cover; object-position:center; border:1px solid rgba(0,0,0,0.4); box-shadow:0 0 2px rgba(0,0,0,0.6);"
-                         onerror="this.outerHTML='⚙️'" />
+                <div style='width: 27px; height: 27px; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:900; color:#fff; text-shadow:0 0 4px rgba(255,255,255,0.65), 0 0 8px rgba(34,211,238,0.45), 0 1px 2px rgba(0,0,0,0.9); font-family:Arial,Helvetica,sans-serif; line-height:1; letter-spacing:-1px;' class='icon js-caption' title='MultBot'>
+                    N
                 </div>
             </div>
         `);
