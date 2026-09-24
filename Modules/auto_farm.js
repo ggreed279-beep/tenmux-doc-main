@@ -1,3 +1,8 @@
+// ══════════════════════════════════════════════════════
+//  MODULE: AutoFarm (HUD Edition v1.0)
+//  Dropdown com estilo futurista (neon/cyberpunk).
+//  Logica de farm 100% intacta - apenas visual.
+// ══════════════════════════════════════════════════════
 var AutoFarm = class extends MultUtil {
     constructor(c, s) {
         super(c, s);
@@ -22,32 +27,196 @@ var AutoFarm = class extends MultUtil {
         if (this.active) this.active = this.createGuardedInterval(this.main, 5000);
     }
 
-    /* Create the dropdown menu */
+    // ══════════════════════════════════════════════════
+    //  ESTILOS HUD (injetados uma única vez)
+    // ══════════════════════════════════════════════════
+    _injectFarmStyles = () => {
+        if (uw.$('#mb-farm-styles').length) return;
+        const css = `
+            @keyframes mbFarmScan {
+                0%   { background-position: 200% 0%; }
+                100% { background-position: -200% 0%; }
+            }
+
+            .mb-farm-hud {
+                background: linear-gradient(135deg, #060816 0%, #0a1020 50%, #060816 100%);
+                border: 1px solid rgba(34,211,238,0.4);
+                border-radius: 4px;
+                padding: 10px;
+                font-family: 'SF Mono','Consolas','Monaco','Menlo',monospace;
+                color: #a8b8d0;
+                position: relative;
+                overflow: hidden;
+                box-sizing: border-box;
+                width: 100%;
+                height: 100%;
+            }
+            .mb-farm-hud::before {
+                content: '';
+                position: absolute; top: 0; left: 0; right: 0; height: 2px;
+                background: linear-gradient(90deg, transparent, #22d3ee, transparent);
+                background-size: 200% 100%;
+                animation: mbFarmScan 3.5s linear infinite;
+                pointer-events: none;
+            }
+            .mb-farm-hud::after {
+                content: '';
+                position: absolute; inset: 0;
+                background-image:
+                    linear-gradient(rgba(34,211,238,0.03) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(34,211,238,0.03) 1px, transparent 1px);
+                background-size: 20px 20px;
+                pointer-events: none;
+                opacity: 0.55;
+            }
+
+            .mb-farm-hud-title {
+                text-align: center;
+                margin-bottom: 10px;
+                padding-bottom: 8px;
+                border-bottom: 1px solid rgba(34,211,238,0.2);
+                position: relative;
+                z-index: 1;
+            }
+            .mb-farm-hud-title .mb-farm-hud-label {
+                color: #22d3ee;
+                font-size: 12px;
+                letter-spacing: 4px;
+                font-weight: 700;
+                text-transform: uppercase;
+                font-family: inherit;
+                text-shadow: 0 0 12px rgba(34,211,238,0.7), 0 0 22px rgba(34,211,238,0.3);
+            }
+
+            .mb-farm-hud-section {
+                margin-bottom: 8px;
+                position: relative;
+                z-index: 1;
+            }
+            .mb-farm-hud-section:last-child { margin-bottom: 0; }
+
+            .mb-farm-hud-subtitle {
+                display: block;
+                font-size: 9px;
+                color: #22d3ee;
+                letter-spacing: 2.5px;
+                text-transform: uppercase;
+                margin-bottom: 5px;
+                font-weight: 700;
+                font-family: inherit;
+                text-shadow: 0 0 6px rgba(34,211,238,0.45);
+            }
+            .mb-farm-hud-subtitle::before {
+                content: '▸ ';
+                opacity: 0.7;
+                margin-right: 2px;
+            }
+
+            .mb-farm-hud-row {
+                display: flex;
+                gap: 5px;
+            }
+
+            .mb-farm-pill {
+                flex: 1;
+                text-align: center;
+                padding: 5px 8px;
+                border-radius: 3px;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 1px;
+                text-transform: uppercase;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                user-select: none;
+                background: rgba(10,16,32,0.6);
+                border: 1px solid rgba(34,211,238,0.25);
+                color: #5a6a7a;
+                font-family: inherit;
+                box-sizing: border-box;
+            }
+            .mb-farm-pill:hover {
+                border-color: rgba(34,211,238,0.55);
+                color: #22d3ee;
+                background: rgba(34,211,238,0.08);
+                box-shadow: 0 0 10px rgba(34,211,238,0.2);
+            }
+            .mb-farm-pill.on {
+                background: rgba(0,255,136,0.15);
+                border-color: rgba(0,255,136,0.55);
+                color: #00ff88;
+                box-shadow: 0 0 12px rgba(0,255,136,0.28), inset 0 0 8px rgba(0,255,136,0.08);
+                text-shadow: 0 0 6px rgba(0,255,136,0.5);
+            }
+            .mb-farm-pill.on:hover {
+                background: rgba(0,255,136,0.25);
+                box-shadow: 0 0 18px rgba(0,255,136,0.5);
+            }
+        `;
+        uw.$('<style id="mb-farm-styles">').text(css).appendTo('head');
+    };
+
+    /* Create the dropdown menu — HUD style */
     createDropdown = () => {
-        this.$content = uw.$("<div></div>");
-        this.$title = uw.$("<p></p>").text(this.t('af_title')).css({ "text-align": "center", "margin": "2px", "font-weight": "bold", "font-size": "16px" });
-        this.$content.append(this.$title);
+        this._injectFarmStyles();
 
-        this.$duration = uw.$("<p></p>").text(this.t('af_duration')).css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$button5 = this.createButton("mult_farm_5", "5 min", this.toggleDuration);
-        this.$button10 = this.createButton("mult_farm_10", "10 min", this.toggleDuration);
-        this.$button20 = this.createButton("mult_farm_20", "20 min", this.toggleDuration);
-        this.$content.append(this.$duration, this.$button5, this.$button10, this.$button20);
+        const $hud = uw.$('<div class="mb-farm-hud"></div>');
+        $hud.html(
+            '<div class="mb-farm-hud-title">' +
+                '<span class="mb-farm-hud-label">◆ Auto Farm ◆</span>' +
+            '</div>' +
 
-        this.$storage = uw.$("<p></p>").text(this.t('af_storage')).css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$button80 = this.createButton("mult_farm_80", "80%", this.toggleStorage).css({ "width": "70px" });
-        this.$button90 = this.createButton("mult_farm_90", "90%", this.toggleStorage).css({ "width": "80px" });
-        this.$button100 = this.createButton("mult_farm_100", "100%", this.toggleStorage).css({ "width": "80px" });
-        this.$content.append(this.$storage, this.$button80, this.$button90, this.$button100);
+            '<div class="mb-farm-hud-section">' +
+                '<div class="mb-farm-hud-subtitle">Duração</div>' +
+                '<div class="mb-farm-hud-row">' +
+                    '<span id="mult_farm_5" class="mb-farm-pill">5 min</span>' +
+                    '<span id="mult_farm_10" class="mb-farm-pill">10 min</span>' +
+                    '<span id="mult_farm_20" class="mb-farm-pill">20 min</span>' +
+                '</div>' +
+            '</div>' +
 
-        this.$gui = uw.$("<p></p>").text(this.t('af_gui')).css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$guiOn = this.createButton("mult_farm_gui_on", "ON", this.toggleGui);
-        this.$guiOff = this.createButton("mult_farm_gui_off", "OFF", this.toggleGui);
-        this.$content.append(this.$gui, this.$guiOn, this.$guiOff);
+            '<div class="mb-farm-hud-section">' +
+                '<div class="mb-farm-hud-subtitle">Armazém</div>' +
+                '<div class="mb-farm-hud-row">' +
+                    '<span id="mult_farm_80" class="mb-farm-pill">80%</span>' +
+                    '<span id="mult_farm_90" class="mb-farm-pill">90%</span>' +
+                    '<span id="mult_farm_100" class="mb-farm-pill">100%</span>' +
+                '</div>' +
+            '</div>' +
 
+            '<div class="mb-farm-hud-section">' +
+                '<div class="mb-farm-hud-subtitle">Modo GUI</div>' +
+                '<div class="mb-farm-hud-row">' +
+                    '<span id="mult_farm_gui_on" class="mb-farm-pill">ON</span>' +
+                    '<span id="mult_farm_gui_off" class="mb-farm-pill">OFF</span>' +
+                '</div>' +
+            '</div>'
+        );
+
+        // Bind handlers
+        $hud.find('#mult_farm_5, #mult_farm_10, #mult_farm_20').on('click', this.toggleDuration);
+        $hud.find('#mult_farm_80, #mult_farm_90, #mult_farm_100').on('click', this.toggleStorage);
+        $hud.find('#mult_farm_gui_on, #mult_farm_gui_off').on('click', this.toggleGui);
+
+        // Store references for updateButtons
+        this.$content = $hud;
+        this.$button5   = $hud.find('#mult_farm_5');
+        this.$button10  = $hud.find('#mult_farm_10');
+        this.$button20  = $hud.find('#mult_farm_20');
+        this.$button80  = $hud.find('#mult_farm_80');
+        this.$button90  = $hud.find('#mult_farm_90');
+        this.$button100 = $hud.find('#mult_farm_100');
+        this.$guiOn     = $hud.find('#mult_farm_gui_on');
+        this.$guiOff    = $hud.find('#mult_farm_gui_off');
+
+        // Create popup
         this.$popup = this.createPopup(423, 250, 170, this.$content);
         this.$popup.css({ 'height': 'auto', 'min-height': '170px' });
-        this.$popup.find('.middle').css({ 'position': 'relative', 'top': '0', 'bottom': '0', 'left': '0', 'right': '0', 'padding': '10px' });
+        this.$popup.find('.middle').css({
+            'position': 'relative',
+            'top': '0', 'bottom': '0', 'left': '0', 'right': '0',
+            'padding': '6px',
+        });
         this.dropdown_active = false;
 
         const close = () => {
@@ -81,32 +250,27 @@ var AutoFarm = class extends MultUtil {
         });
     }
 
-    /* Update the buttons */
+    /* Update the buttons — HUD: ativo = .on (verde neon) */
     updateButtons = () => {
-        this.$button5.addClass('disabled');
-        this.$button10.addClass('disabled');
-        this.$button20.addClass('disabled');
-        this.$button80.addClass('disabled');
-        this.$button90.addClass('disabled');
-        this.$button100.addClass('disabled');
+        const setActive = ($btn, isOn) => {
+            if (!$btn || !$btn.length) return;
+            if (isOn) $btn.addClass('on');
+            else $btn.removeClass('on');
+        };
 
-        if (this.timing == 300000) this.$button5.removeClass('disabled');
-        if (this.timing == 600000) this.$button10.removeClass('disabled');
-        if (this.timing == 1200000) this.$button20.removeClass('disabled');
-
-        if (this.percent == 0.8) this.$button80.removeClass('disabled');
-        if (this.percent == 0.9) this.$button90.removeClass('disabled');
-        if (this.percent == 1) this.$button100.removeClass('disabled');
+        setActive(this.$button5,   this.timing === 300000);
+        setActive(this.$button10,  this.timing === 600000);
+        setActive(this.$button20,  this.timing === 1200000);
+        setActive(this.$button80,  this.percent === 0.8);
+        setActive(this.$button90,  this.percent === 0.9);
+        setActive(this.$button100, this.percent === 1);
+        setActive(this.$guiOn,     this.gui === true);
+        setActive(this.$guiOff,    this.gui === false);
 
         if (!this.active) {
-            this.$count.css('color', "red");
-            this.$count.text("");
+            this.$count.css('color', 'red');
+            this.$count.text('');
         }
-
-        this.$guiOn.addClass('disabled');
-        this.$guiOff.addClass('disabled');
-        if (this.gui) this.$guiOn.removeClass('disabled');
-        else this.$guiOff.removeClass('disabled');
     }
 
     toggleDuration = (event) => {
@@ -494,7 +658,7 @@ var AutoFarm = class extends MultUtil {
             }
         }
 
-        setTimeout(function() { uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers(); }, 2000);
+        setTimeout(function() { uw.WMap.removeFarmTownCooldownIconAndRefreshLootTimers(); }, 2000);
     };
 
     /* Return the total resources of the polis in the list */
