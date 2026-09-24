@@ -219,10 +219,10 @@ var MultBot = class {
     setup = () => {
         if (this.settingsFactory) this.settingsFactory.activate();
 
-        // 👈 ALTERADO — botão do menu com "N" branca a negrito em vez da imagem (que dava 404)
+        // 👈 ALTERADO — botão do menu com "N" simples, sem negrito, em vez da imagem (que dava 404)
         uw.$('.gods_area_buttons').append(`
             <div class='circle_button mult_bot_settings' onclick='window.multBot.settingsFactory.openWindow()'>
-                <div style='width: 27px; height: 27px; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:900; color:#fff; text-shadow:0 0 4px rgba(255,255,255,0.65), 0 0 8px rgba(34,211,238,0.45), 0 1px 2px rgba(0,0,0,0.9); font-family:Arial,Helvetica,sans-serif; line-height:1; letter-spacing:-1px;' class='icon js-caption' title='MultBot'>
+                <div style='width: 27px; height: 27px; display:flex; align-items:center; justify-content:center; font-size:19px; font-weight:normal; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.8); font-family:Arial,Helvetica,sans-serif; line-height:1;' class='icon js-caption' title='MultBot'>
                     N
                 </div>
             </div>
