@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         BotGrepo
+// @name         MultBot
 // @author       NotXina
 // @description  Automação modular para Grepolis: construção, recrutamento, ataque, defesa, farm e mais.
-// @version      1.9.0
+// @version      1.8.5
 // @match        http://*.grepolis.com/game/*
 // @match        https://*.grepolis.com/game/*
 // @grant        none
@@ -15,14 +15,17 @@
     'use strict';
 
     var uw;
-    if (typeof unsafeWindow == 'undefined') { uw = window; }
-    else { uw = unsafeWindow; }
+    if (typeof unsafeWindow == 'undefined') {
+        uw = window;
+    } else {
+        uw = unsafeWindow;
+    }
 
-    if (uw.__botgrepo_index_running__) {
-        console.warn('[BotGrepo] ⚠ index.js já está rodando nesta página — execução duplicada ignorada.');
+    if (uw.__multbot_index_running__) {
+        console.warn('[MultBot] ⚠ index.js já está rodando nesta página — execução duplicada ignorada.');
         return;
     }
-    uw.__botgrepo_index_running__ = true;
+    uw.__multbot_index_running__ = true;
 
     const BASE_URL = 'https://raw.githubusercontent.com/ggreed279-beep/tenmux-doc-main/main/Modules';
     const MAX_RETRIES = 2;
@@ -62,30 +65,30 @@
     let completed = 0;
 
     function injectAll() {
-        if (uw.__botgrepo_modules_injected__) {
-            console.warn('[BotGrepo] ⚠ Módulos já haviam sido injetados nesta página — injeção duplicada bloqueada.');
+        if (uw.__multbot_modules_injected__) {
+            console.warn('[MultBot] ⚠ Módulos já haviam sido injetados nesta página — injeção duplicada bloqueada.');
             return;
         }
-        uw.__botgrepo_modules_injected__ = true;
+        uw.__multbot_modules_injected__ = true;
 
         const fullCode =
             '(function () {\n' +
             '  var __uw = (typeof unsafeWindow == "undefined") ? window : unsafeWindow;\n' +
-            '  if (__uw.__botgrepo_classes_declared__) {\n' +
-            '    console.warn("[BotGrepo] \\u26a0 Classes ja declaradas nesta pagina - reinjecao abortada.");\n' +
+            '  if (__uw.__multbot_classes_declared__) {\n' +
+            '    console.warn("[MultBot] \\u26a0 Classes ja declaradas nesta pagina - reinjecao abortada.");\n' +
             '    return;\n' +
             '  }\n' +
-            '  __uw.__botgrepo_classes_declared__ = true;\n' +
+            '  __uw.__multbot_classes_declared__ = true;\n' +
             codes.join('\n\n') +
             '\n})();';
 
         try {
             const runBundle = new Function(fullCode);
             runBundle();
-            console.log('[BotGrepo] ✓ Todos os módulos injetados! (index.js v1.9.0)');
+            console.log('[MultBot] ✓ Todos os módulos injetados! (index.js v1.8.5)');
         } catch (e) {
-            console.warn('[BotGrepo] ⚠ Falha ao injetar o bundle: ' + (e?.message ?? e));
-            console.warn('[BotGrepo] ⚠ Se o bot não carregou, dê um refresh completo (Ctrl+Shift+R).');
+            console.warn('[MultBot] ⚠ Falha ao injetar o bundle: ' + (e?.message ?? e));
+            console.warn('[MultBot] ⚠ Se o bot não carregou, dê um refresh completo (Ctrl+Shift+R).');
         }
     }
 
@@ -98,10 +101,13 @@
         try {
             const response = await fetch(url, { method: 'GET', cache: 'no-store', signal: controller.signal });
             clearTimeout(timeoutId);
-            if (!response.ok) { retryOrFail(index, attempt, `HTTP ${response.status}`); return; }
+            if (!response.ok) {
+                retryOrFail(index, attempt, `HTTP ${response.status}`);
+                return;
+            }
             const text = await response.text();
             codes[index] = text;
-            console.log(`[BotGrepo] ✓ baixado: ${mod}`);
+            console.log(`[MultBot] ✓ baixado: ${mod}`);
             completed++;
             if (completed === MODULES.length) injectAll();
         } catch (err) {
@@ -115,11 +121,11 @@
         const mod = MODULES[index];
         if (attempt < MAX_RETRIES) {
             const nextAttempt = attempt + 1;
-            console.warn(`[BotGrepo] ⚠ ${reason} ao baixar ${mod} — tentativa ${nextAttempt}/${MAX_RETRIES}`);
+            console.warn(`[MultBot] ⚠ ${reason} ao baixar ${mod} — tentativa ${nextAttempt}/${MAX_RETRIES}`);
             setTimeout(() => fetchModule(index, nextAttempt), 800 * nextAttempt);
         } else {
-            codes[index] = `console.error('[BotGrepo] Falha definitiva ao carregar ${mod} após ${MAX_RETRIES} tentativas (${reason})');`;
-            console.error(`[BotGrepo] ✗ Desistindo de ${mod} após ${MAX_RETRIES} tentativas: ${reason}`);
+            codes[index] = `console.error('[MultBot] Falha definitiva ao carregar ${mod} após ${MAX_RETRIES} tentativas (${reason})');`;
+            console.error(`[MultBot] ✗ Desistindo de ${mod} após ${MAX_RETRIES} tentativas: ${reason}`);
             completed++;
             if (completed === MODULES.length) injectAll();
         }
@@ -127,7 +133,7 @@
 
     function waitForGame() {
         if (typeof Game !== 'undefined' && Game.player_id) {
-            console.log('[BotGrepo] Game detectado, baixando módulos...');
+            console.log('[MultBot] Game detectado, baixando módulos...');
             MODULES.forEach((_, i) => fetchModule(i));
         } else {
             setTimeout(waitForGame, 500);
