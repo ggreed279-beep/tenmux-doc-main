@@ -62,6 +62,7 @@
     'auto_research.js',
     'auto_send_resources.js',
     'colonize_ship_sender.js',
+        'auto_festival.js',   // 👈 NOVO — coloca antes de 'multbot.js'
     'mult_tools.js',
     'auto_quest.js',
     'sniper.js',
