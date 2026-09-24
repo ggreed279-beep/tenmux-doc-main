@@ -31,10 +31,11 @@ var MultBot = class {
         this.autoMilitia        = this._safeInit('AutoMilitia', () => new AutoMilitia(this.console, this.storage));
         this.autoDodge          = this._safeInit('AutoDodge', () => new AutoDodge(this.console, this.storage));
         this.autoAttack         = this._safeInit('AutoAttack', () => new AutoAttack(this.console, this.storage));
-        this.autoCommandPaster  = this._safeInit('AutoCommandPaster', () => new AutoCommandPaster(this.console, this.storage));  // 👈 NOVO
+        this.autoCommandPaster  = this._safeInit('AutoCommandPaster', () => new AutoCommandPaster(this.console, this.storage));
         this.autoSpells          = this._safeInit('AutoSpells', () => new AutoSpells(this.console, this.storage));
         this.autoResearch       = this._safeInit('AutoResearch', () => new AutoResearch(this.console, this.storage));
         this.autoSendResources  = this._safeInit('AutoSendResources', () => new AutoSendResources(this.console, this.storage));
+        this.autoFestival       = this._safeInit('AutoFestival', () => new AutoFestival(this.console, this.storage));  // 👈 NOVO
         this.statusPanel        = this._safeInit('StatusPanel', () => new StatusPanel(this.console, this.storage));
 
         this.settingsFactory = this._safeInit('SettingsWindow', () => new createGrepoWindow({
@@ -52,6 +53,11 @@ var MultBot = class {
                     id: 'farm',
                     render: this.settingsFarm,
                 },
+                {
+                    title: 'Recur/Fest',          // 👈 NOVO
+                    id: 'festival',               // 👈 NOVO
+                    render: this.settingsFestival,// 👈 NOVO
+                },                                // 👈 NOVO
                 {
                     title: multT('tab_build'),
                     id: 'build',
@@ -130,6 +136,13 @@ var MultBot = class {
         return html;
     };
 
+    // 👈 NOVO — render da aba "Recur/Fest"
+    settingsFestival = () => {
+        let html = '';
+        html += this.autoFestival ? this.autoFestival.settings() : this._missingModuleHtml('Auto Festival');
+        return html;
+    };
+
     settingsBuild = () => {
         let html = '';
         html += this.autoGratis ? this.autoGratis.settings() : this._missingModuleHtml('Auto Gratis');
@@ -151,7 +164,7 @@ var MultBot = class {
 
     settingsAttack = () => {
         let html = '';
-        html += this.autoCommandPaster ? this.autoCommandPaster.settings() : this._missingModuleHtml('Command Paster');  // 👈 NOVO
+        html += this.autoCommandPaster ? this.autoCommandPaster.settings() : this._missingModuleHtml('Command Paster');
         html += this.autoAttack ? this.autoAttack.settings() : this._missingModuleHtml('Auto Attack');
         return html;
     };
