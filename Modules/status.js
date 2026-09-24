@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════
-//  MODULE: StatusPanel
+//  MODULE: StatusPanel (Futuristic HUD v2.0)
 //  Painel de status em tempo real de todos os módulos
 //
 //  PDCA - correcao desta rodada: _getTownName local removido,
@@ -8,6 +8,10 @@
 //  PDCA - nesta rodada: adicionadas linhas de Auto Ataque,
 //  Auto Fuga (Dodge), Sacrificio de Ares e Auto Pesquisa,
 //  que ja existiam no bot mas nao apareciam no painel.
+//
+//  PDCA - VISUAL: redesign completo para HUD futurista
+//  (neon/cyberpunk) com LEDs, glow, e animacoes. Logica
+//  intacta - apenas apresentacao e estilos.
 // ══════════════════════════════════════════════════════
 var StatusPanel = class extends MultUtil {
     constructor(c, s) {
@@ -17,47 +21,399 @@ var StatusPanel = class extends MultUtil {
         this._countdownInterval = null;
         this._nextRefreshAt = null;
         this._refreshMinutes = this.storage.load('refresh_minutes', 0);
+        this._styleInjected = false;
 
         if (this._refreshMinutes > 0) {
             this._scheduleRefresh();
         }
     }
 
+    // ══════════════════════════════════════════════════
+    //  ESTILOS FUTURISTAS (HUD)
+    // ══════════════════════════════════════════════════
+    _injectStyles() {
+        if (uw.$('#mbhud-styles').length) {
+            this._styleInjected = true;
+            return;
+        }
+        const css = `
+            @keyframes mbhud-pulse {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.55; transform: scale(1.25); }
+            }
+            @keyframes mbhud-scan {
+                0%   { background-position: 200% 0%; }
+                100% { background-position: -200% 0%; }
+            }
+            @keyframes mbhud-fade {
+                from { opacity: 0; transform: translateY(-3px); }
+                to   { opacity: 1; transform: translateY(0); }
+            }
+
+            .mbhud-root {
+                background:
+                    linear-gradient(135deg, #060816 0%, #0a1020 50%, #060816 100%);
+                border: 1px solid rgba(34,211,238,0.35);
+                border-radius: 6px;
+                padding: 12px;
+                font-family: 'SF Mono', 'Consolas', 'Monaco', 'Menlo', monospace;
+                color: #a8b8d0;
+                box-shadow:
+                    0 0 24px rgba(34,211,238,0.15),
+                    inset 0 0 60px rgba(34,211,238,0.03);
+                position: relative;
+                overflow: hidden;
+                animation: mbhud-fade 0.35s ease;
+            }
+            .mbhud-root::before {
+                content: '';
+                position: absolute;
+                top: 0; left: 0; right: 0; height: 2px;
+                background: linear-gradient(90deg, transparent, #22d3ee, transparent);
+                background-size: 200% 100%;
+                animation: mbhud-scan 3.5s linear infinite;
+                pointer-events: none;
+            }
+            .mbhud-root::after {
+                content: '';
+                position: absolute;
+                inset: 0;
+                background-image:
+                    linear-gradient(rgba(34,211,238,0.035) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(34,211,238,0.035) 1px, transparent 1px);
+                background-size: 22px 22px;
+                pointer-events: none;
+                opacity: 0.55;
+            }
+
+            .mbhud-header {
+                text-align: center;
+                padding: 4px 0 12px;
+                border-bottom: 1px solid rgba(34,211,238,0.2);
+                margin-bottom: 12px;
+                position: relative;
+                z-index: 1;
+            }
+            .mbhud-header h2 {
+                margin: 0;
+                font-size: 14px;
+                letter-spacing: 6px;
+                text-transform: uppercase;
+                color: #22d3ee;
+                text-shadow: 0 0 12px rgba(34,211,238,0.7), 0 0 26px rgba(34,211,238,0.3);
+                font-weight: 700;
+                font-family: inherit;
+            }
+            .mbhud-header .sub {
+                font-size: 9px;
+                color: #4a5a6a;
+                letter-spacing: 3px;
+                margin-top: 5px;
+                text-transform: uppercase;
+            }
+            .mbhud-header .sub .live {
+                color: #00ff88;
+                text-shadow: 0 0 8px rgba(0,255,136,0.6);
+                font-variant-numeric: tabular-nums;
+            }
+
+            .mbhud-section {
+                background: rgba(10, 16, 32, 0.6);
+                border: 1px solid rgba(34,211,238,0.2);
+                border-radius: 4px;
+                padding: 10px 12px;
+                margin-bottom: 10px;
+                position: relative;
+                z-index: 1;
+            }
+            .mbhud-label {
+                display: block;
+                font-size: 9px;
+                letter-spacing: 2.5px;
+                text-transform: uppercase;
+                color: #22d3ee;
+                margin-bottom: 8px;
+                text-shadow: 0 0 8px rgba(34,211,238,0.6);
+                font-weight: 700;
+                font-family: inherit;
+            }
+            .mbhud-label::before {
+                content: '▸ ';
+                opacity: 0.7;
+                margin-right: 2px;
+            }
+
+            .mbhud-input {
+                background: rgba(0,0,0,0.55);
+                border: 1px solid rgba(34,211,238,0.3);
+                border-radius: 3px;
+                color: #e8f0ff;
+                padding: 4px 8px;
+                font-family: inherit;
+                font-size: 11px;
+                outline: none;
+                transition: all 0.2s;
+                min-width: 72px;
+                font-variant-numeric: tabular-nums;
+            }
+            .mbhud-input:focus {
+                border-color: #22d3ee;
+                box-shadow: 0 0 12px rgba(34,211,238,0.4);
+                background: rgba(0,0,0,0.8);
+            }
+            .mbhud-input::-webkit-calendar-picker-indicator {
+                filter: invert(0.75) sepia(1) saturate(6) hue-rotate(140deg);
+                cursor: pointer;
+            }
+
+            .mbhud-btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 5px 12px;
+                background: linear-gradient(180deg, rgba(34,211,238,0.14), rgba(34,211,238,0.04));
+                border: 1px solid rgba(34,211,238,0.5);
+                border-radius: 3px;
+                color: #22d3ee;
+                font-family: inherit;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 1.2px;
+                text-transform: uppercase;
+                cursor: pointer;
+                transition: all 0.2s;
+                text-shadow: 0 0 6px rgba(34,211,238,0.5);
+                user-select: none;
+                outline: none;
+            }
+            .mbhud-btn:hover {
+                background: linear-gradient(180deg, rgba(34,211,238,0.3), rgba(34,211,238,0.1));
+                box-shadow: 0 0 16px rgba(34,211,238,0.5);
+                transform: translateY(-1px);
+            }
+            .mbhud-btn:active { transform: translateY(0); }
+            .mbhud-btn.btn-danger {
+                background: linear-gradient(180deg, rgba(248,113,113,0.14), rgba(248,113,113,0.04));
+                border-color: rgba(248,113,113,0.55);
+                color: #f87171;
+                text-shadow: 0 0 6px rgba(248,113,113,0.5);
+            }
+            .mbhud-btn.btn-danger:hover {
+                background: linear-gradient(180deg, rgba(248,113,113,0.32), rgba(248,113,113,0.1));
+                box-shadow: 0 0 16px rgba(248,113,113,0.5);
+            }
+
+            .mbhud-flex {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
+            }
+
+            .mbhud-status {
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.6px;
+                text-transform: uppercase;
+                font-family: inherit;
+            }
+            .mbhud-status.on   { color: #00ff88; text-shadow: 0 0 8px rgba(0,255,136,0.6); }
+            .mbhud-status.off  { color: #f87171; text-shadow: 0 0 8px rgba(248,113,113,0.4); }
+            .mbhud-status.warn { color: #ffb020; text-shadow: 0 0 8px rgba(255,176,32,0.6); }
+
+            .mbhud-led {
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background: #1a2030;
+                border: 1px solid rgba(255,255,255,0.08);
+                vertical-align: middle;
+                flex-shrink: 0;
+            }
+            .mbhud-led.on {
+                background: #00ff88;
+                box-shadow: 0 0 8px #00ff88, 0 0 14px rgba(0,255,136,0.55);
+                animation: mbhud-pulse 2s ease-in-out infinite;
+            }
+            .mbhud-led.off { background: #2a1a1a; box-shadow: inset 0 0 3px rgba(255,0,0,0.15); }
+            .mbhud-led.warn {
+                background: #ffb020;
+                box-shadow: 0 0 8px #ffb020;
+                animation: mbhud-pulse 1.2s ease-in-out infinite;
+            }
+
+            .mbhud-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 6px 10px;
+                border-bottom: 1px solid rgba(34,211,238,0.08);
+                transition: background 0.2s;
+                gap: 7px;
+            }
+            .mbhud-row:last-child { border-bottom: none; }
+            .mbhud-row:hover { background: rgba(34,211,238,0.045); }
+            .mbhud-row-name {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 11px;
+                font-weight: 700;
+                color: #e8f0ff;
+                letter-spacing: 0.4px;
+                flex: 1;
+                min-width: 0;
+            }
+            .mbhud-row-name > span:last-child {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .mbhud-row-value {
+                font-size: 10px;
+                color: #6a7a8a;
+                letter-spacing: 0.3px;
+                text-align: right;
+                max-width: 180px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .mbhud-row-value.hot {
+                color: #22d3ee;
+                text-shadow: 0 0 6px rgba(34,211,238,0.45);
+            }
+
+            .mbhud-pill {
+                padding: 3px 10px;
+                border-radius: 20px;
+                font-size: 9px;
+                font-weight: 700;
+                letter-spacing: 1.2px;
+                text-transform: uppercase;
+                cursor: pointer;
+                font-family: inherit;
+                transition: all 0.2s;
+                border: 1px solid;
+                outline: none;
+                user-select: none;
+                white-space: nowrap;
+            }
+            .mbhud-pill.on {
+                background: rgba(0,255,136,0.12);
+                border-color: rgba(0,255,136,0.5);
+                color: #00ff88;
+                box-shadow: 0 0 10px rgba(0,255,136,0.2);
+                text-shadow: 0 0 6px rgba(0,255,136,0.4);
+            }
+            .mbhud-pill.on:hover {
+                background: rgba(0,255,136,0.25);
+                box-shadow: 0 0 18px rgba(0,255,136,0.55);
+            }
+            .mbhud-pill.off {
+                background: rgba(248,113,113,0.07);
+                border-color: rgba(248,113,113,0.28);
+                color: #7a8a94;
+            }
+            .mbhud-pill.off:hover {
+                background: rgba(248,113,113,0.18);
+                border-color: rgba(248,113,113,0.6);
+                color: #f87171;
+                box-shadow: 0 0 12px rgba(248,113,113,0.35);
+            }
+
+            .mbhud-countdown {
+                font-size: 11px;
+                font-weight: 700;
+                color: #22d3ee;
+                text-shadow: 0 0 8px rgba(34,211,238,0.5);
+                letter-spacing: 1px;
+                font-variant-numeric: tabular-nums;
+                margin-left: auto;
+                padding: 3px 9px;
+                border: 1px solid rgba(34,211,238,0.3);
+                border-radius: 3px;
+                background: rgba(34,211,238,0.05);
+            }
+
+            .mbhud-hint {
+                font-size: 9px;
+                color: #4a5a6a;
+                margin-top: 6px;
+                line-height: 1.6;
+                letter-spacing: 0.3px;
+            }
+            .mbhud-arrow {
+                font-size: 11px;
+                color: #4a5a6a;
+                letter-spacing: 1px;
+                font-weight: 700;
+            }
+        `;
+        uw.$('<style id="mbhud-styles">').text(css).appendTo('head');
+        this._styleInjected = true;
+    }
+
+    // ══════════════════════════════════════════════════
+    //  UI
+    // ══════════════════════════════════════════════════
     settings = () => {
+        this._injectStyles();
         requestAnimationFrame(() => this._startVisuals());
+
         const sleeperEnabled = this.storage.load('sleeper_enabled', false);
         const sleeperStart = this.storage.load('sleeper_start', '23:00');
         const sleeperEnd = this.storage.load('sleeper_end', '07:00');
+
         return `
-        <div style="padding:5px 8px;border-bottom:1px solid rgba(0,0,0,0.1);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span style="font-weight:bold;font-size:12px;">${this.t('sleeper_label')}</span>
-            <input id="sleeper_start_input" type="time" value="${sleeperStart}" style="padding:2px 5px;" />
-            <span style="font-size:11px;">${this.t('sleeper_to')}</span>
-            <input id="sleeper_end_input" type="time" value="${sleeperEnd}" style="padding:2px 5px;" />
-            ${this.getButtonHtml('btn_set_sleeper', this.t('apply'), this._applySleeper)}
-            ${sleeperEnabled ? this.getButtonHtml('btn_disable_sleeper', this.t('sleeper_disable'), this._disableSleeper) : ''}
-            <span id="sleeper_status" style="font-size:11px;font-weight:bold;"></span>
-        </div>
-        <div style="padding:1px 8px 6px;font-size:10px;color:#8a7a5a;">
-            ${this.t('sleeper_desc')}
-        </div>
-        <div style="padding:5px 8px;border-bottom:1px solid rgba(0,0,0,0.1);display:flex;align-items:center;gap:8px;">
-            <span style="font-weight:bold;font-size:12px;">${this.t('auto_refresh_label')}</span>
-            <input id="refresh_minutes_input" type="number" min="0" max="999" value="${this._refreshMinutes}"
-                style="width:55px;padding:2px 5px;" placeholder="min" />
-            ${this.getButtonHtml('btn_set_refresh', this.t('apply'), this._applyRefresh)}
-            <span id="refresh_status" style="font-size:11px;color:#5a3a0a;"></span>
-            <span id="refresh_countdown" style="font-size:11px;color:#3a2a0a;font-weight:bold;margin-left:auto;"></span>
-        </div>
-        <div id="status_rows" style="padding:4px;"></div>`;
+        <div class="mbhud-root">
+            <div class="mbhud-header">
+                <h2>◆ SYSTEM MONITOR ◆</h2>
+                <div class="sub">MULTBOT · LAST SYNC · <span class="live" id="mbhud-last-sync">--:--:--</span></div>
+            </div>
+
+            <div class="mbhud-section">
+                <span class="mbhud-label">SLEEP CYCLE</span>
+                <div class="mbhud-flex">
+                    <input id="sleeper_start_input" class="mbhud-input" type="time" value="${sleeperStart}" />
+                    <span class="mbhud-arrow">→</span>
+                    <input id="sleeper_end_input" class="mbhud-input" type="time" value="${sleeperEnd}" />
+                    <button id="btn_set_sleeper" class="mbhud-btn" type="button">${this.t('apply')}</button>
+                    ${sleeperEnabled ? `<button id="btn_disable_sleeper" class="mbhud-btn btn-danger" type="button">${this.t('sleeper_disable')}</button>` : ''}
+                    <span id="sleeper_status" class="mbhud-status"></span>
+                </div>
+                <div class="mbhud-hint">${this.t('sleeper_desc')}</div>
+            </div>
+
+            <div class="mbhud-section">
+                <span class="mbhud-label">AUTO-REFRESH</span>
+                <div class="mbhud-flex">
+                    <input id="refresh_minutes_input" class="mbhud-input" type="number" min="0" max="999"
+                        value="${this._refreshMinutes}" placeholder="min" style="width:60px;min-width:60px;" />
+                    <span class="mbhud-hint" style="margin:0;">min</span>
+                    <button id="btn_set_refresh" class="mbhud-btn" type="button">${this.t('apply')}</button>
+                    <span id="refresh_status" class="mbhud-status"></span>
+                    <span id="refresh_countdown" class="mbhud-countdown"></span>
+                </div>
+            </div>
+
+            <div class="mbhud-section">
+                <span class="mbhud-label">ACTIVE MODULES</span>
+                <div id="status_rows"></div>
+            </div>
+        </div>`;
     };
 
+    // ══════════════════════════════════════════════════
+    //  SLEEPER
+    // ══════════════════════════════════════════════════
     _applySleeper = () => {
         const start = uw.$('#sleeper_start_input').val();
         const end = uw.$('#sleeper_end_input').val();
 
         if (!start || !end) {
-            uw.$('#sleeper_status').text(this.t('sleeper_invalid')).css('color', '#8a2a2a');
+            uw.$('#sleeper_status').text(this.t('sleeper_invalid')).removeClass('on warn').addClass('off');
             return;
         }
 
@@ -80,7 +436,10 @@ var StatusPanel = class extends MultUtil {
         const enabled = this.storage.load('sleeper_enabled', false);
         const $btn = uw.$('#btn_disable_sleeper');
         if (enabled && $btn.length === 0) {
-            uw.$('#btn_set_sleeper').after(this.getButtonHtml('btn_disable_sleeper', this.t('sleeper_disable'), this._disableSleeper));
+            uw.$('#btn_set_sleeper').after(
+                `<button id="btn_disable_sleeper" class="mbhud-btn btn-danger" type="button">${this.t('sleeper_disable')}</button>`
+            );
+            uw.$('#btn_disable_sleeper').off('click').on('click', this._disableSleeper);
         } else if (!enabled && $btn.length > 0) {
             $btn.remove();
         }
@@ -88,17 +447,23 @@ var StatusPanel = class extends MultUtil {
 
     _renderSleeperStatus() {
         try {
+            const $el = uw.$('#sleeper_status');
+            if ($el.length === 0) return;
+
             const enabled = this.storage.load('sleeper_enabled', false);
             if (!enabled) {
-                uw.$('#sleeper_status').text(this.t('status_disabled')).css('color', '#8a2a2a');
+                $el.text(this.t('status_disabled')).removeClass('on warn').addClass('off');
                 return;
             }
             const sleeping = this.isSleeping();
             const msg = sleeping ? this.t('sleeper_active_now') : this.t('sleeper_scheduled');
-            uw.$('#sleeper_status').text(msg).css('color', sleeping ? '#c9a227' : '#1a6b2a');
+            $el.text(msg).removeClass('on off').addClass(sleeping ? 'warn' : 'on');
         } catch (e) {}
     }
 
+    // ══════════════════════════════════════════════════
+    //  AUTO-REFRESH
+    // ══════════════════════════════════════════════════
     _applyRefresh = () => {
         const val = parseInt(uw.$('#refresh_minutes_input').val(), 10);
 
@@ -107,7 +472,7 @@ var StatusPanel = class extends MultUtil {
         if (!val || val <= 0) {
             this._refreshMinutes = 0;
             this.storage.save('refresh_minutes', 0);
-            uw.$('#refresh_status').text(this.t('status_disabled')).css('color', '#8a2a2a');
+            uw.$('#refresh_status').text(this.t('status_disabled')).removeClass('on warn').addClass('off');
             uw.$('#refresh_countdown').text('');
             return;
         }
@@ -115,7 +480,7 @@ var StatusPanel = class extends MultUtil {
         this._refreshMinutes = val;
         this.storage.save('refresh_minutes', val);
         this._scheduleRefresh();
-        uw.$('#refresh_status').text(this.t('status_reloads_every', { min: val })).css('color', '#1a6b2a');
+        uw.$('#refresh_status').text(this.t('status_reloads_every', { min: val })).removeClass('off warn').addClass('on');
 
         this.console.log(`[StatusPanel] Auto Refresh: ${val} minuto(s) (± jitter).`);
     };
@@ -140,39 +505,46 @@ var StatusPanel = class extends MultUtil {
         this._refreshTimeoutId = setTimeout(() => location.reload(), ms);
     }
 
+    // ══════════════════════════════════════════════════
+    //  VISUAIS / RENDER
+    // ══════════════════════════════════════════════════
     _startVisuals() {
         if (this._interval) clearInterval(this._interval);
         this._render();
-        // FIX: usa createGuardedInterval (respectSleep=false) em vez de
-        // setInterval cru - alem de seguir o padrao do resto do projeto,
-        // isso evita que o proprio painel de status (que mostra o estado
-        // do Sleeper) fique CONGELADO durante a janela de sono, o que
-        // pareceria um bot travado/crashado em vez de so pausado.
+        this._bindButtons();
+
         this._interval = this.createGuardedInterval(() => this._render(), 3000, false);
 
         if (this._countdownInterval) clearInterval(this._countdownInterval);
         this._countdownInterval = this.createGuardedInterval(() => this._updateCountdown(), 1000, false);
 
         if (this._refreshMinutes > 0 && this._nextRefreshAt) {
-            uw.$('#refresh_status').text(this.t('status_reloads_every', { min: this._refreshMinutes })).css('color', '#1a6b2a');
+            uw.$('#refresh_status').text(this.t('status_reloads_every', { min: this._refreshMinutes }))
+                .removeClass('off warn').addClass('on');
         } else if (this._refreshMinutes > 0) {
             this._scheduleRefresh();
-            uw.$('#refresh_status').text(this.t('status_reloads_every', { min: this._refreshMinutes })).css('color', '#1a6b2a');
+            uw.$('#refresh_status').text(this.t('status_reloads_every', { min: this._refreshMinutes }))
+                .removeClass('off warn').addClass('on');
         }
         this._updateCountdown();
         this._renderSleeperStatus();
     }
 
+    _bindButtons() {
+        uw.$('#btn_set_sleeper').off('click').on('click', this._applySleeper);
+        uw.$('#btn_disable_sleeper').off('click').on('click', this._disableSleeper);
+        uw.$('#btn_set_refresh').off('click').on('click', this._applyRefresh);
+    }
+
     _updateCountdown() {
-        if (!this._nextRefreshAt) {
-            uw.$('#refresh_countdown').text('');
-            return;
-        }
+        const $el = uw.$('#refresh_countdown');
+        if ($el.length === 0) return;
+        if (!this._nextRefreshAt) { $el.text(''); return; }
         const remaining = Math.max(0, this._nextRefreshAt - Date.now());
         const totalSec = Math.floor(remaining / 1000);
         const mm = Math.floor(totalSec / 60).toString().padStart(2, '0');
         const ss = (totalSec % 60).toString().padStart(2, '0');
-        uw.$('#refresh_countdown').text(`⏱ ${mm}:${ss}`);
+        $el.text(`⏱ ${mm}:${ss}`);
     }
 
     _render() {
@@ -180,21 +552,28 @@ var StatusPanel = class extends MultUtil {
             const bot  = uw.multBot;
             const rows = [];
 
-            const farmActive  = !!bot.autoFarm?.active;
-            const ruralActive = !!bot.autoRuralLevel?.enable;
-            const buildCount  = Object.keys(bot.autoBuild?.towns_buildings ?? {}).length;
-            const trainCount  = Object.keys(bot.autoTrain?.city_troops ?? {}).length;
-            const partyActive = !!bot.autoParty?.enable;
-            const cel         = this._countCelebrations();
-            const celStr      = [cel.party && `${cel.party} ${this.t('label_party')}`, cel.theater && `${cel.theater} ${this.t('label_theater')}`, cel.triumph && `${cel.triumph} ${this.t('label_triumph')}`].filter(Boolean).join(' · ') || '—';
+            // Timestamp de última sync
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            const ss = String(now.getSeconds()).padStart(2, '0');
+            uw.$('#mbhud-last-sync').text(`${hh}:${mm}:${ss}`);
+
+            const farmActive   = !!bot.autoFarm?.active;
+            const ruralActive  = !!bot.autoRuralLevel?.enable;
+            const buildCount   = Object.keys(bot.autoBuild?.towns_buildings ?? {}).length;
+            const trainCount   = Object.keys(bot.autoTrain?.city_troops ?? {}).length;
+            const partyActive  = !!bot.autoParty?.enable;
+            const cel          = this._countCelebrations();
+            const celStr       = [cel.party && `${cel.party} ${this.t('label_party')}`, cel.theater && `${cel.theater} ${this.t('label_theater')}`, cel.triumph && `${cel.triumph} ${this.t('label_triumph')}`].filter(Boolean).join(' · ') || '—';
             const gratisActive = !!bot.autoGratis?.autogratis;
-            const cssActive   = !!bot.colonizeShipSender?._running;
-            const asrActive   = !!bot.autoSendResources?._active;
-            const militiaActive    = !!bot.autoMilitia?._active;
-            const hideActive       = !!bot.autoHide?._active;
-            const questActive      = !!bot.autoQuest?._active;
-            const discordActive    = !!bot.discordAlert?._active;
-            const sniperPending    = (bot.sniper?._scheduled ?? []).filter(s => s.status === 'pending').length;
+            const cssActive    = !!bot.colonizeShipSender?._running;
+            const asrActive    = !!bot.autoSendResources?._active;
+            const militiaActive = !!bot.autoMilitia?._active;
+            const hideActive    = !!bot.autoHide?._active;
+            const questActive   = !!bot.autoQuest?._active;
+            const discordActive = !!bot.discordAlert?._active;
+            const sniperPending = (bot.sniper?._scheduled ?? []).filter(s => s.status === 'pending').length;
 
             // These modules already existed and already expose
             // _active + toggle(), they just weren't being read here
@@ -227,7 +606,7 @@ var StatusPanel = class extends MultUtil {
             uw.$('#status_rows').html(rows.join(''));
             this._renderSleeperStatus();
         } catch(e) {
-            uw.$('#status_rows').html(`<div style="padding:5px;color:red;">${this.t('error')}: ${e.message}</div>`);
+            uw.$('#status_rows').html(`<div style="padding:8px;color:#f87171;font-size:11px;">${this.t('error')}: ${e.message}</div>`);
         }
     }
 
@@ -236,22 +615,22 @@ var StatusPanel = class extends MultUtil {
             ? `window.multBot.${module}.${method}()`
             : null;
 
-        const btn = onclick
-            ? `<div class="button_new ${active ? '' : 'disabled'}" onclick="${onclick}" style="cursor:pointer;margin:0;">
-                <div class="left"></div><div class="right"></div>
-                <div class="caption js-caption">${active ? this.t('active') : this.t('stopped')}<div class="effect js-effect"></div></div>
-               </div>`
-            : `<span style="font-size:11px;color:#3a2a0a;font-style:italic;">${active ? '● ' + this.t('active') : '○ —'}</span>`;
+        const ledClass = active ? 'on' : 'off';
+
+        const btnHtml = onclick
+            ? `<button class="mbhud-pill ${active ? 'on' : 'off'}" type="button" onclick="${onclick}">
+                   ${active ? this.t('active') : this.t('stopped')}
+               </button>`
+            : `<span class="mbhud-status ${active ? 'on' : 'off'}">${active ? '● ' + this.t('active') : '○ —'}</span>`;
 
         return `
-        <div style="display:flex;justify-content:space-between;align-items:center;
-            padding:4px 8px;border-bottom:1px solid rgba(0,0,0,0.08);
-            ${active ? 'background:rgba(0,80,0,0.05);' : ''}">
-            <span style="font-weight:bold;font-size:12px;">${label}</span>
-            <div style="display:flex;align-items:center;gap:8px;">
-                <span style="font-size:11px;color:#5a3a0a;">${value}</span>
-                ${btn}
+        <div class="mbhud-row">
+            <div class="mbhud-row-name">
+                <span class="mbhud-led ${ledClass}"></span>
+                <span>${label}</span>
             </div>
+            <span class="mbhud-row-value ${active ? 'hot' : ''}">${value}</span>
+            ${btnHtml}
         </div>`;
     }
 
