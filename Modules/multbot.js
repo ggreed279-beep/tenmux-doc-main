@@ -43,61 +43,17 @@ var MultBot = class {
             title: 'MultBot',
             size: [845, 560],
             tabs: [
-                {
-                    title: multT('tab_status'),
-                    id: 'status',
-                    render: this.settingsStatus,
-                },
-                {
-                    title: multT('tab_farm'),
-                    id: 'farm',
-                    render: this.settingsFarm,
-                },
-                {
-                    title: 'Recur/Fest',
-                    id: 'festival',
-                    render: this.settingsFestival,
-                },
-                {
-                    title: multT('tab_build'),
-                    id: 'build',
-                    render: this.settingsBuild,
-                },
-                {
-                    title: multT('tab_train'),
-                    id: 'train',
-                    render: this.settingsTrain,
-                },
-                {
-                    title: multT('tab_mix'),
-                    id: 'mix',
-                    render: this.settingsMix,
-                },
-                {
-                    title: multT('tab_attack'),
-                    id: 'attack',
-                    render: this.settingsAttack,
-                },
-                {
-                    title: multT('sniper_title'),
-                    id: 'sniper',
-                    render: this.settingsSniper,
-                },
-                {
-                    title: multT('tab_spells'),
-                    id: 'spells',
-                    render: this.settingsSpells,
-                },
-                {
-                    title: multT('tab_mult'),
-                    id: 'mult',
-                    render: this.settingsMult,
-                },
-                {
-                    title: multT('tab_console'),
-                    id: 'console',
-                    render: this.console.renderSettings,
-                },
+                { title: multT('tab_status'), id: 'status', render: this.settingsStatus },
+                { title: multT('tab_farm'),   id: 'farm',   render: this.settingsFarm },
+                { title: 'Recur/Fest',        id: 'festival', render: this.settingsFestival },
+                { title: multT('tab_build'),  id: 'build',  render: this.settingsBuild },
+                { title: multT('tab_train'),  id: 'train',  render: this.settingsTrain },
+                { title: multT('tab_mix'),    id: 'mix',    render: this.settingsMix },
+                { title: multT('tab_attack'), id: 'attack', render: this.settingsAttack },
+                { title: multT('sniper_title'), id: 'sniper', render: this.settingsSniper },
+                { title: multT('tab_spells'), id: 'spells', render: this.settingsSpells },
+                { title: multT('tab_mult'),   id: 'mult',   render: this.settingsMult },
+                { title: multT('tab_console'), id: 'console', render: this.console.renderSettings },
             ],
             start_tab: 0,
         }));
@@ -105,12 +61,6 @@ var MultBot = class {
         this.setup();
     }
 
-    /* Instantiates a module isolated from failure: if a module's
-       constructor throws an exception, the error goes to the console
-       (game console + BotConsole) and the following modules keep
-       getting instantiated normally. Without this, one broken module
-       would kill the initialization of ALL modules declared after it
-       in the constructor. */
     _safeInit = (name, factory) => {
         try {
             return factory();
@@ -136,7 +86,6 @@ var MultBot = class {
         return html;
     };
 
-    // render da aba "Recur/Fest"
     settingsFestival = () => {
         let html = '';
         html += this.autoFestival ? this.autoFestival.settings() : this._missingModuleHtml('Auto Festival');
@@ -187,10 +136,6 @@ var MultBot = class {
         return html;
     };
 
-    /* Colonize Ships now renders here, inside the Mult tab,
-       alongside the presets, Auto Research and Auto Sacrifice.
-       The separate Ships tab was removed - it was the one that
-       was broken because of this._getTownName. */
     settingsMult = () => {
         let html = '';
         html += this.multTools ? this.multTools.settings() : this._missingModuleHtml('Mult Tools');
@@ -205,9 +150,6 @@ var MultBot = class {
         return html;
     };
 
-    /* Simple HTML shown in place of a module that failed to
-       initialize, to make it clear in the UI (instead of throwing
-       an exception when rendering the tab). */
     _missingModuleHtml = (name) => {
         return `<div class="game_border" style="margin-bottom:20px;">
             <div style="padding:8px;font-size:11px;color:#f87171;">
@@ -219,11 +161,11 @@ var MultBot = class {
     setup = () => {
         if (this.settingsFactory) this.settingsFactory.activate();
 
-        // 👈 ALTERADO — engrenagem SVG amarela (#ffcc00) em tamanho 12px no botão do menu
+        // 👈 ALTERADO — engrenagem SVG amarela, centrada, 22px (igual ao peso dos outros ícones)
         uw.$('.gods_area_buttons').append(`
             <div class='circle_button mult_bot_settings' onclick='window.multBot.settingsFactory.openWindow()'>
-                <div style='width: 27px; height: 27px; display:flex; align-items:center; justify-content:center;' class='icon js-caption' title='MultBot'>
-                    <svg viewBox="0 0 24 24" width="12" height="12" fill="#ffcc00" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 1px 1px rgba(0,0,0,0.7));">
+                <div style='width: 27px; height: 27px; display:flex; align-items:center; justify-content:center; line-height:0; padding:0; margin:0;' class='icon js-caption' title='MultBot'>
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="#ffcc00" xmlns="http://www.w3.org/2000/svg" style="display:block; filter:drop-shadow(0 1px 1px rgba(0,0,0,0.7));">
                         <path d="M19.14 12.94a7.07 7.07 0 0 0 .06-.94 7.07 7.07 0 0 0-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.61l-1.92-3.32a.5.5 0 0 0-.59-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.49-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54c-.58.24-1.12.55-1.62.94l-2.39-.96a.5.5 0 0 0-.59.22L2.74 8.87a.5.5 0 0 0 .12.61l2.03 1.58c-.04.31-.06.62-.06.94 0 .32.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.61l1.92 3.32c.13.22.39.3.59.22l2.39-.96c.5.39 1.04.7 1.62.94l.36 2.54c.04.24.25.42.49.42h3.84c.24 0 .45-.18.49-.42l.36-2.54c.58-.24 1.12-.55 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.5.5 0 0 0-.12-.61l-2.03-1.58zm-7.14 2.7a3.64 3.64 0 1 1 0-7.28 3.64 3.64 0 0 1 0 7.28z"/>
                     </svg>
                 </div>
