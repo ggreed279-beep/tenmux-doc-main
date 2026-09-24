@@ -62,11 +62,11 @@
     'auto_research.js',
     'auto_send_resources.js',
     'colonize_ship_sender.js',
-        'auto_festival.js',   // 👈 NOVO — coloca antes de 'multbot.js'
     'mult_tools.js',
     'auto_quest.js',
     'sniper.js',
     'discord_alert.js',
+        'auto_festival.js',
     'multbot.js',
 ];
     const codes = new Array(MODULES.length).fill(null);
