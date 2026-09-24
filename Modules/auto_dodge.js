@@ -1,0 +1,678 @@
+// ══════════════════════════════════════════════════════
+//  MODULE: AutoDodge
+//  Detecta ataques chegando e agenda a evacuacao das tropas
+//  para exatamente ~15s antes do impacto - enviando para
+//  QUALQUER cidade na MESMA ILHA (cacheada em uw.ITowns.towns
+//  + aprendizado passivo de ilhas), terrestres e navais
+//  SEPARADAMENTE - e traz de volta automaticamente depois
+//  (cancel_command).
+//
+//  Melhorias:
+//  1) Deteccao instantanea via Backbone MovementsUnits.on('add')
+//     — reage imediatamente a novos ataques, sem esperar o poll
+//     periodico de 15s. Poll mantido como fallback.
+//  2) Recalls persistidos no storage (dodge_pending_recalls) —
+//     sobrevivem a reloads de pagina.
+//  3) Endpoint de recall corrigido: command_info/cancel_command
+//     (confirmado via captura real — frontend_bridge/cancelCommand
+//     era o endpoint errado).
+//  4) this.ajaxPostWithTimeout em todas as chamadas de rede.
+//  5) this.getTownName (MultUtil) em vez de _getTownName local.
+// ══════════════════════════════════════════════════════
+var AutoDodge = class extends MultUtil {
+    EVACUATE_LEAD_SECONDS = 15;
+    RECALL_BUFFER_SECONDS = 20;
+    CAPTURE_DELAY_MS = 2500;
+    ISLAND_SCRAPE_DELAY_MS = 400;
+
+    constructor(c, s) {
+        super(c, s);
+        this._active = false;
+        this._intervalId = null;
+        this._scheduledEvac = new Map();
+        this._evacuated = new Set();
+        this._pendingRecalls = new Map();
+        this._islandScraperObserver = null;
+        this._boundOnAdd = null;   // referencia do listener backbone
+        this._collection = null;
+
+        this._islandCache = this.storage.load('dodge_island_cache', {});
+
+        // Reconciliacao de recalls pendentes acontece SEMPRE, mesmo
+        // que o modulo esteja desativado - se ha uma tropa em apoio
+        // esperando para ser chamada de volta, isso deve acontecer
+        // independente do estado do toggle.
+        this._reconcilePendingRecalls();
+
+        if (this.storage.load('dodge_active', false)) {
+            setTimeout(() => {
+                this.start();
+            }, 2000);
+        }
+    }
+
+    settings = () => {
+        requestAnimationFrame(() => {
+            this._updateTitle();
+        });
+        return (
+            '<div class="game_border" style="margin-bottom:20px;">' +
+            '<div class="game_border_top"></div><div class="game_border_bottom"></div>' +
+            '<div class="game_border_left"></div><div class="game_border_right"></div>' +
+            '<div class="game_border_corner corner1"></div><div class="game_border_corner corner2"></div>' +
+            '<div class="game_border_corner corner3"></div><div class="game_border_corner corner4"></div>' +
+            this.getTitleHtml('dodge_title', this.t('ad_title'), this.toggle, '', this._active) +
+            '<div style="padding:5px 10px;font-weight:bold;" title="' + this.t('ad_tooltip') + '">' +
+            this.t('ad_desc', { sec: this.EVACUATE_LEAD_SECONDS }) +
+            '</div>' +
+            '<div id="dodge_log" style="padding:2px 10px 8px;font-size:11px;color:#5a3a0a;min-height:16px;"></div>' +
+            '</div>'
+        );
+    };
+
+    toggle = () => {
+        if (this._active) {
+            this.stop();
+        } else {
+            this.start();
+        }
+    };
+
+    start() {
+        if (this._active) return;
+        this._active = true;
+        this.storage.save('dodge_active', true);
+        this._updateTitle();
+        this.console.log('[AutoDodge] ' + this.t('ad_started_log'));
+
+        // Deteccao instantanea via Backbone
+        this._hookBackbone();
+
+        // Poll de seguranca: ataques ja existentes ao ativar + reloads.
+        // respectSleep=false: modulo de defesa critico.
+        this._tick();
+        this._intervalId = this.createGuardedInterval(() => this._tick(), 15000, false);
+        this._setupIslandScraper();
+    }
+
+    stop() {
+        this._active = false;
+        this.storage.save('dodge_active', false);
+
+        if (this._intervalId) {
+            clearInterval(this._intervalId);
+            this._intervalId = null;
+        }
+
+        for (const timeoutId of this._scheduledEvac.values()) {
+            clearTimeout(timeoutId);
+        }
+        this._scheduledEvac.clear();
+
+        // IMPORTANTE: so cancelamos os TIMERS locais aqui. Os recalls
+        // persistidos no storage NAO sao apagados - eles continuam
+        // validos e serao reconciliados/disparados na proxima vez que
+        // o modulo for carregado (constructor), mesmo que o usuario
+        // reative o toggle depois.
+        for (const entry of this._pendingRecalls.values()) {
+            clearTimeout(entry.timeoutId);
+        }
+        this._pendingRecalls.clear();
+        this._evacuated.clear();
+
+        this._teardownIslandScraper();
+        this._unhookBackbone();
+
+        this._updateTitle();
+        this.console.log('[AutoDodge] ' + this.t('ad_stopped_log'));
+    }
+
+    _updateTitle() {
+        const filter = this._active ? 'brightness(100%) saturate(186%) hue-rotate(241deg)' : '';
+        uw.$('#dodge_title').css('filter', filter);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  BACKBONE — deteccao instantanea de novos ataques
+    // ─────────────────────────────────────────────────────────────
+
+    _hookBackbone() {
+        this._unhookBackbone();
+
+        const MAX_WAIT_MS = 10000;
+        const RETRY_MS   = 500;
+        const start      = Date.now();
+
+        const tryHook = () => {
+            try {
+                const collection = uw.MM.getOnlyCollectionByName('MovementsUnits');
+                if (!collection) {
+                    if (Date.now() - start < MAX_WAIT_MS) setTimeout(tryHook, RETRY_MS);
+                    else this.console.log('[AutoDodge] MovementsUnits nao encontrado - so poll ativo.');
+                    return;
+                }
+
+                this._boundOnAdd = (model) => {
+                    try {
+                        const mv = model?.attributes;
+                        if (!mv) return;
+                        const isAttack = mv.type === 'attack' || mv.type === 'attack_with_spy';
+                        const isOurTown = uw.ITowns?.towns?.[mv.target_town_id];
+                        if (!isAttack || !isOurTown) return;
+
+                        // Novo ataque detectado — processa imediatamente
+                        // sem esperar o proximo poll de 15s
+                        this.console.log('[AutoDodge] [INSTANT] Novo ataque detectado via Backbone.');
+                        this._tick();
+                    } catch (e) {
+                        this.console.log('[AutoDodge] backbone onAdd error: ' + (e?.message ?? e));
+                    }
+                };
+
+                collection.on('add', this._boundOnAdd);
+                this._collection = collection;
+                this.console.log('[AutoDodge] Backbone hook ativo — deteccao instantanea.');
+            } catch (e) {
+                this.console.log('[AutoDodge] _hookBackbone error: ' + (e?.message ?? e));
+            }
+        };
+
+        tryHook();
+    }
+
+    _unhookBackbone() {
+        try {
+            if (this._collection && this._boundOnAdd) {
+                this._collection.off('add', this._boundOnAdd);
+            }
+        } catch (e) {}
+        this._collection = null;
+        this._boundOnAdd = null;
+    }
+
+    _setupIslandScraper() {
+        if (this._islandScraperObserver) return;
+
+        this._islandScraperObserver = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                for (const node of m.addedNodes) {
+                    if (!node || node.nodeType !== 1) continue;
+
+                    let links = [];
+                    try {
+                        if (node.matches && node.matches('a.gp_town_link')) {
+                            links = [node];
+                        } else if (node.querySelectorAll) {
+                            links = Array.from(node.querySelectorAll('a.gp_town_link'));
+                        }
+                    } catch (e) { continue; }
+
+                    if (links.length > 0) {
+                        setTimeout(() => this._harvestTownLinks(links), this.ISLAND_SCRAPE_DELAY_MS);
+                    }
+                }
+            }
+        });
+
+        this._islandScraperObserver.observe(document.body, { childList: true, subtree: true });
+        this.console.log('[AutoDodge] ' + this.t('ad_island_scraper_active_log'));
+    }
+
+    _teardownIslandScraper() {
+        if (this._islandScraperObserver) {
+            this._islandScraperObserver.disconnect();
+            this._islandScraperObserver = null;
+        }
+    }
+
+    _harvestTownLinks(links) {
+        let added = 0;
+
+        for (const el of links) {
+            try {
+                const href = el.getAttribute('href') || '';
+                const match = href.match(/#([A-Za-z0-9+/=]{8,})/);
+                if (!match) continue;
+
+                const decoded = JSON.parse(atob(match[1]));
+                if (decoded.tp !== 'town') continue;
+                if (!decoded.id || decoded.ix === undefined || decoded.iy === undefined) continue;
+
+                const key = decoded.ix + ',' + decoded.iy;
+                if (!this._islandCache[key]) this._islandCache[key] = {};
+
+                const idStr = String(decoded.id);
+                if (!this._islandCache[key][idStr]) {
+                    this._islandCache[key][idStr] = { id: decoded.id, name: decoded.name || ('#' + decoded.id) };
+                    added++;
+                }
+            } catch (e) {
+                // link nao decodificavel, ignora
+            }
+        }
+
+        if (added > 0) {
+            this.storage.save('dodge_island_cache', this._islandCache);
+            this.console.log('[AutoDodge] ' + this.t('ad_learned_towns_log', { n: added }));
+        }
+    }
+
+    /* Tick assincrono - roda dentro do createGuardedInterval, entao
+       nunca sobrepoe outro ciclo em andamento. */
+    async _tick() {
+        if (window.__multbot_captcha_active) return;
+
+        try {
+            const attacks = this._getIncomingAttacks();
+            const now = Math.floor(Date.now() / 1000);
+            const byTown = new Map();
+
+            for (const atk of attacks) {
+                const townId = String(atk.target_town_id);
+                const arrival = atk.arrival_at ? atk.arrival_at : (atk.time_of_arrival ? atk.time_of_arrival : 0);
+                if (!arrival) continue;
+
+                if (!byTown.has(townId) || arrival > byTown.get(townId)) {
+                    byTown.set(townId, arrival);
+                }
+            }
+
+            const attackedTowns = new Set(byTown.keys());
+
+            for (const townId of this._scheduledEvac.keys()) {
+                if (!attackedTowns.has(townId)) {
+                    clearTimeout(this._scheduledEvac.get(townId));
+                    this._scheduledEvac.delete(townId);
+                }
+            }
+
+            for (const townId of this._evacuated) {
+                if (!attackedTowns.has(townId)) {
+                    this._evacuated.delete(townId);
+                }
+            }
+
+            for (const entry of byTown) {
+                const townId = entry[0];
+                const arrival = entry[1];
+
+                if (this._evacuated.has(townId)) continue;
+
+                const remaining = arrival - now;
+                const townLabel = this.getTownName(townId);
+
+                if (remaining <= this.EVACUATE_LEAD_SECONDS) {
+                    if (this._scheduledEvac.has(townId)) {
+                        clearTimeout(this._scheduledEvac.get(townId));
+                        this._scheduledEvac.delete(townId);
+                    }
+                    this._evacuated.add(townId);
+
+                    const safeTownId = this._pickRandomTownOnSameIsland(townId);
+                    this.console.log('[AutoDodge] ' + this.t('ad_safety_evac_log', { town: townLabel, sec: remaining }));
+                    this._evacuateTown(townId, arrival, safeTownId);
+                    continue;
+                }
+
+                if (this._scheduledEvac.has(townId)) continue;
+
+                const safeTownId = this._pickRandomTownOnSameIsland(townId);
+                const fireInMs = (remaining - this.EVACUATE_LEAD_SECONDS) * 1000;
+
+                const timeoutId = setTimeout(() => {
+                    this._scheduledEvac.delete(townId);
+                    if (this._evacuated.has(townId)) return;
+                    this._evacuated.add(townId);
+                    this._evacuateTown(townId, arrival, safeTownId);
+                }, fireInMs);
+
+                this._scheduledEvac.set(townId, timeoutId);
+
+                const secLeft = Math.round(fireInMs / 1000);
+                if (safeTownId) {
+                    const safeTownLabel = this.getTownName(safeTownId);
+                    this.console.log('[AutoDodge] ' + this.t('ad_evac_scheduled_log', { from: townLabel, to: safeTownLabel, sec: secLeft, lead: this.EVACUATE_LEAD_SECONDS }));
+                } else {
+                    this.console.log('[AutoDodge] ' + this.t('ad_evac_scheduled_no_island_log', { town: townLabel, sec: secLeft }));
+                }
+            }
+        } catch (e) {
+            const msg = e && e.message ? e.message : e;
+            this.console.log('[AutoDodge] ' + this.t('ad_tick_error', { msg }));
+        }
+    }
+
+    _getIncomingAttacks() {
+        try {
+            const models = uw.MM.getModels().MovementsUnits;
+            if (!models) return [];
+
+            const attacks = [];
+            for (const key in models) {
+                const mv = models[key].attributes;
+                if (!mv) continue;
+                const isAttack = mv.type === 'attack' || mv.type === 'attack_with_spy';
+                const targetExists = uw.ITowns && uw.ITowns.towns && uw.ITowns.towns[mv.target_town_id];
+                if (isAttack && targetExists) {
+                    attacks.push(mv);
+                }
+            }
+            return attacks;
+        } catch (e) {
+            return [];
+        }
+    }
+
+    _pickRandomTownOnSameIsland(attackedTownId) {
+        try {
+            const attackedTown = uw.ITowns.towns[attackedTownId];
+            if (!attackedTown || typeof attackedTown.getIslandCoordinateX !== 'function') return null;
+
+            const ix = attackedTown.getIslandCoordinateX();
+            const iy = attackedTown.getIslandCoordinateY();
+            const candidates = [];
+
+            const townsObj = uw.ITowns.towns;
+            for (const townId in townsObj) {
+                if (String(townId) === String(attackedTownId)) continue;
+
+                const t = townsObj[townId];
+                if (!t || typeof t.getIslandCoordinateX !== 'function') continue;
+
+                if (t.getIslandCoordinateX() === ix && t.getIslandCoordinateY() === iy) {
+                    if (!candidates.includes(String(townId))) candidates.push(String(townId));
+                }
+            }
+
+            const cacheKey = ix + ',' + iy;
+            const cached = this._islandCache[cacheKey];
+            if (cached) {
+                for (const idStr in cached) {
+                    if (idStr === String(attackedTownId)) continue;
+                    if (!candidates.includes(idStr)) candidates.push(idStr);
+                }
+            }
+
+            if (candidates.length === 0) return null;
+            const randomIndex = Math.floor(Math.random() * candidates.length);
+            return candidates[randomIndex];
+        } catch (e) {
+            const msg = e && e.message ? e.message : e;
+            this.console.log('[AutoDodge] ' + this.t('ad_find_island_error', { msg }));
+            return null;
+        }
+    }
+
+    _splitUnitsByType(town) {
+        const all = Object.assign({}, town.units());
+        delete all.militia;
+
+        const landUnits = {};
+        const navalUnits = {};
+
+        for (const unit of Object.keys(all)) {
+            const count = all[unit];
+            if (!count || count <= 0) continue;
+
+            const unitData = uw.GameData.units[unit];
+            const isNaval = unitData && unitData.is_naval ? true : false;
+
+            if (isNaval) {
+                navalUnits[unit] = count;
+            } else {
+                landUnits[unit] = count;
+            }
+        }
+
+        return { landUnits: landUnits, navalUnits: navalUnits };
+    }
+
+    async _evacuateTown(townId, attackArrival, safeTownId) {
+        try {
+            const town = uw.ITowns.towns[townId];
+            if (!town) return;
+
+            const townName = town.getName ? town.getName() : ('#' + townId);
+
+            if (!safeTownId) {
+                safeTownId = this._pickRandomTownOnSameIsland(townId);
+            }
+
+            if (!safeTownId) {
+                this.console.log('[AutoDodge] ' + this.t('ad_evac_no_island_log', { town: townName }));
+                uw.$('#dodge_log').text(this.t('ad_evac_no_island_status', { town: townName })).css('color', '#eab308');
+                return;
+            }
+
+            const safeTownName = this.getTownName(safeTownId);
+            const split = this._splitUnitsByType(town);
+            const landUnits = split.landUnits;
+            const navalUnits = split.navalUnits;
+            const hasLand = Object.keys(landUnits).length > 0;
+            const hasNaval = Object.keys(navalUnits).length > 0;
+
+            if (!hasLand && !hasNaval) {
+                this.console.log('[AutoDodge] ' + this.t('ad_no_troops_log', { town: townName }));
+                return;
+            }
+
+            this.console.log('[AutoDodge] ' + this.t('ad_evacuating_log', { town: townName, safe: safeTownName }));
+
+            const excludeIds = new Set();
+
+            if (hasLand) {
+                await this._evacuateGroup(townId, safeTownId, landUnits, 'terrestre', townName, attackArrival, excludeIds);
+            } else {
+                this.console.log('[AutoDodge] ' + this.t('ad_no_land_troops_log', { town: townName }));
+            }
+
+            if (hasNaval) {
+                await this._evacuateGroup(townId, safeTownId, navalUnits, 'naval', townName, attackArrival, excludeIds);
+            } else {
+                this.console.log('[AutoDodge] ' + this.t('ad_no_naval_troops_log', { town: townName }));
+            }
+
+            const finalMsg = this.t('ad_evacuated_log', { town: townName, safe: safeTownName });
+            this.console.log('[AutoDodge] ' + finalMsg);
+            uw.$('#dodge_log').text(finalMsg).css('color', '#1a6b2a');
+
+            if (uw.HumanMessage) {
+                uw.HumanMessage.success('MultBot: ' + townName + ' -> ' + safeTownName);
+            }
+        } catch (e) {
+            const msg = e && e.message ? e.message : e;
+            this.console.log('[AutoDodge] ' + this.t('ad_evacuate_error', { id: townId, msg }));
+        }
+    }
+
+    async _evacuateGroup(fromTownId, toTownId, units, label, townName, attackArrival, excludeIds) {
+        try {
+            const result = await this._sendUnits(fromTownId, toTownId, units);
+            this.console.log('[AutoDodge] ' + this.t('ad_group_response_log', { label, res: JSON.stringify(result) }));
+
+            await this.sleep(this.CAPTURE_DELAY_MS);
+            const commandId = this._findSupportCommandId(fromTownId, toTownId, excludeIds);
+
+            if (commandId) {
+                this.console.log('[AutoDodge] ' + this.t('ad_command_found_log', { town: townName, label, id: commandId }));
+                excludeIds.add(String(commandId));
+                this._scheduleRecall(fromTownId, townName, attackArrival, commandId, label);
+            } else {
+                this.console.log('[AutoDodge] ' + this.t('ad_command_not_found_log', { town: townName, label }));
+                uw.$('#dodge_log').text(this.t('ad_command_not_found_status', { town: townName, label })).css('color', '#eab308');
+            }
+        } catch (e) {
+            const msg = e && e.message ? e.message : e;
+            this.console.log('[AutoDodge] ' + this.t('ad_send_group_fail_log', { label, town: townName, msg }));
+        }
+    }
+
+    _findSupportCommandId(fromTownId, toTownId, excludeIds) {
+        const excluded = excludeIds ? excludeIds : new Set();
+        try {
+            const models = uw.MM.getModels().MovementsUnits;
+            if (!models) return null;
+
+            for (const key in models) {
+                const mv = models[key].attributes;
+                if (!mv) continue;
+                if (mv.type !== 'support') continue;
+                if (String(mv.home_town_id) !== String(fromTownId)) continue;
+                if (String(mv.target_town_id) !== String(toTownId)) continue;
+
+                const cmdId = mv.command_id;
+                if (!cmdId) continue;
+                if (excluded.has(String(cmdId))) continue;
+
+                return cmdId;
+            }
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /* Agenda o recall E PERSISTE a informacao no storage. Se a pagina
+       recarregar antes do timer disparar, o constructor do modulo (via
+       _reconcilePendingRecalls) vai encontrar essa entrada persistida
+       e cuidar dela - seja disparando na hora (se ja passou do prazo)
+       ou reagendando o tempo restante. */
+    _scheduleRecall(townId, townName, attackArrival, commandId, label) {
+        const now = Math.floor(Date.now() / 1000);
+        const rawSec = (attackArrival - now) + this.RECALL_BUFFER_SECONDS;
+        const fireInSec = rawSec > this.RECALL_BUFFER_SECONDS ? rawSec : this.RECALL_BUFFER_SECONDS;
+        const fireInMs = fireInSec * 1000;
+        const recallKey = townId + ':' + label;
+        const dueAt = Date.now() + fireInMs;
+
+        this.console.log('[AutoDodge] ' + this.t('ad_recall_scheduled_log', { town: townName, label, sec: fireInSec, id: commandId }));
+
+        this._savePendingRecall(recallKey, { townId: townId, townName: townName, commandId: commandId, label: label, dueAt: dueAt });
+
+        const timeoutId = setTimeout(() => {
+            this._pendingRecalls.delete(recallKey);
+            this._removePendingRecall(recallKey);
+            this._recallSupport(townId, townName, commandId, label);
+        }, fireInMs);
+
+        this._pendingRecalls.set(recallKey, { timeoutId: timeoutId, commandId: commandId });
+    }
+
+    _loadPendingRecallsStore() {
+        return this.storage.load('dodge_pending_recalls', {});
+    }
+
+    _savePendingRecall(recallKey, entry) {
+        const store = this._loadPendingRecallsStore();
+        store[recallKey] = entry;
+        this.storage.save('dodge_pending_recalls', store);
+    }
+
+    _removePendingRecall(recallKey) {
+        const store = this._loadPendingRecallsStore();
+        if (store[recallKey]) {
+            delete store[recallKey];
+            this.storage.save('dodge_pending_recalls', store);
+        }
+    }
+
+    /* Roda no constructor, SEMPRE (independente do toggle ativo/inativo).
+       Le os recalls persistidos no storage e garante que nenhum foi
+       perdido por causa de um reload no meio do caminho: os que ja
+       deveriam ter disparado, disparam agora; os que ainda tem tempo,
+       sao reagendados com o tempo restante. */
+    _reconcilePendingRecalls() {
+        try {
+            const store = this._loadPendingRecallsStore();
+            const keys = Object.keys(store);
+            if (keys.length === 0) return;
+
+            this.console.log('[AutoDodge] ' + this.t('ad_reconcile_start_log', { n: keys.length }));
+
+            for (const recallKey of keys) {
+                const entry = store[recallKey];
+                if (!entry || !entry.commandId) {
+                    this._removePendingRecall(recallKey);
+                    continue;
+                }
+
+                const remaining = entry.dueAt - Date.now();
+
+                if (remaining <= 0) {
+                    this.console.log('[AutoDodge] ' + this.t('ad_reconcile_fire_now_log', { town: entry.townName, label: entry.label }));
+                    this._removePendingRecall(recallKey);
+                    this._recallSupport(entry.townId, entry.townName, entry.commandId, entry.label);
+                } else {
+                    this.console.log('[AutoDodge] ' + this.t('ad_reconcile_reschedule_log', { town: entry.townName, label: entry.label, sec: Math.round(remaining / 1000) }));
+                    const timeoutId = setTimeout(() => {
+                        this._pendingRecalls.delete(recallKey);
+                        this._removePendingRecall(recallKey);
+                        this._recallSupport(entry.townId, entry.townName, entry.commandId, entry.label);
+                    }, remaining);
+                    this._pendingRecalls.set(recallKey, { timeoutId: timeoutId, commandId: entry.commandId });
+                }
+            }
+        } catch (e) {
+            const msg = e && e.message ? e.message : e;
+            this.console.log('[AutoDodge] ' + this.t('ad_reconcile_error', { msg }));
+        }
+    }
+
+    _recallSupport(townId, townName, commandId, label) {
+        // Confirmado via captura real (sniper.js): endpoint correto e
+        // command_info/cancel_command com payload {id, town_id, nl_init}
+        // NAO e frontend_bridge/execute com model_url "Commands" (nunca
+        // confirmado por captura, estava errado).
+        const data = {
+            id: parseInt(commandId, 10),
+            town_id: parseInt(townId, 10),
+            nl_init: true,
+        };
+
+        this.console.log('[AutoDodge] ' + this.t('ad_recall_calling_log', { town: townName, label, id: commandId }));
+
+        this.ajaxPostWithTimeout('command_info', 'cancel_command', data, 15000)
+            .then((res) => {
+                this.console.log('[AutoDodge] ' + this.t('ad_recall_response_log', { label, res: JSON.stringify(res) }));
+                if (res && !res.error) {
+                    const msg = this.t('ad_recall_success_log', { town: townName, label });
+                    this.console.log('[AutoDodge] ' + msg);
+                    uw.$('#dodge_log').text(msg).css('color', '#1a6b2a');
+                    if (uw.HumanMessage) {
+                        uw.HumanMessage.success('MultBot: ' + townName + ' (' + label + ') - retornando!');
+                    }
+                } else {
+                    this.console.log('[AutoDodge] ' + this.t('ad_recall_fail_log', { town: townName, label, res: JSON.stringify(res) }));
+                    uw.$('#dodge_log').text(this.t('ad_recall_fail_status', { town: townName, label })).css('color', '#f87171');
+                }
+            })
+            .catch((err) => {
+                this.console.log('[AutoDodge] ' + this.t('ad_recall_network_error', { town: townName, label, msg: (err && err.message ? err.message : err) }));
+            });
+    }
+
+    _sendUnits(fromTownId, toTownId, units) {
+        return this._withTownId(fromTownId, () => {
+            const data = Object.assign(
+                { id: parseInt(toTownId, 10), type: 'support' },
+                units
+            );
+            return this.ajaxPostWithTimeout('town_info', 'send_units', data, 15000);
+        });
+    }
+
+    async _withTownId(townId, fn) {
+        const orig = uw.Game.townId;
+        const origStr = uw.Game.town_id;
+        uw.Game.townId = parseInt(townId, 10);
+        uw.Game.town_id = parseInt(townId, 10);
+
+        try {
+            const result = await fn();
+            return result;
+        } finally {
+            uw.Game.townId = orig;
+            uw.Game.town_id = origStr;
+        }
+    }
+};
