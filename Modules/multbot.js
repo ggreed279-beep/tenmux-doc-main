@@ -219,11 +219,11 @@ var MultBot = class {
     setup = () => {
         if (this.settingsFactory) this.settingsFactory.activate();
 
-        // 👈 ALTERADO — botão do menu com "N" em tamanho 8px, sem negrito
+        // 👈 ALTERADO — engrenagem amarela (⚙️) em tamanho 10px no botão do menu
         uw.$('.gods_area_buttons').append(`
             <div class='circle_button mult_bot_settings' onclick='window.multBot.settingsFactory.openWindow()'>
-                <div style='width: 27px; height: 27px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:normal; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.8); font-family:Arial,Helvetica,sans-serif; line-height:1;' class='icon js-caption' title='MultBot'>
-                    N
+                <div style='width: 27px; height: 27px; display:flex; align-items:center; justify-content:center; font-size:10px; color:#ffcc00; text-shadow:0 1px 2px rgba(0,0,0,0.8); line-height:1;' class='icon js-caption' title='MultBot'>
+                    ⚙️
                 </div>
             </div>
         `);
