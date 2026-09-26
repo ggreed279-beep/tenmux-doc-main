@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════════════════
-// MODULE: AutoFestival v1.4.2 (Correção Crítica: Bloqueio de Doação por Recetores)
+// MODULE: AutoFestival v1.4.3 (Correção: Toggle Sempre Ativo)
 // ═══════════════════════════════════════════════════════
 
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.4.2';
+    VERSION = '1.4.3';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
@@ -27,7 +27,9 @@ var AutoFestival = class extends MultUtil {
 
     constructor(c, s) {
         super(c, s);
-        if (this.storage.load(this.STORAGE_KEY_ACTIVE, false)) {
+        // Define como ativo por padrão se não houver estado salvo, ou respeita o salvo
+        const wasActive = this.storage.load(this.STORAGE_KEY_ACTIVE, true); 
+        if (wasActive) {
             setTimeout(() => { if (!this._active) this.start(); }, 3000);
         }
     }
@@ -124,7 +126,8 @@ var AutoFestival = class extends MultUtil {
         );
     };
 
-    toggle = () => { if (this._active) this.stop(); else this.start(); };
+    // ALTERAÇÃO: Agora apenas ativa. Se já estiver ativo, o método start() ignora a chamada.
+    toggle = () => { this.start(); };
 
     start() {
         if (this._active) return;
@@ -138,6 +141,7 @@ var AutoFestival = class extends MultUtil {
         }, this.CONFIG.intervalMs);
     }
 
+    // Método stop() mantido para uso interno se necessário, mas não é mais chamado pelo toggle
     stop() {
         if (!this._active) return;
         this._active = false;
@@ -398,9 +402,9 @@ var AutoFestival = class extends MultUtil {
 
             const targetId = this._getTargetTown();
             if (!targetId) {
-                this._log('✅ Todas as cidades elegíveis estão abastecidas ou com festival ativo.', 'ok');
+                // ALTERAÇÃO: Removido this.stop() para que o script continue a monitorizar indefinidamente
+                this._log('✅ Todas as cidades elegíveis estão abastecidas ou com festival ativo. Continuando a monitorizar...', 'ok');
                 this._refreshUI();
-                this.stop();
                 return;
             }
 
