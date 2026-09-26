@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════════════════
-// MODULE: AutoFestival v1.4.0 (Foco Único + 500 Fixos por Envio)
+// MODULE: AutoFestival v1.4.1 (Correção Crítica de Doadores)
 // ═══════════════════════════════════════════════════════
 
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.4.0';
+    VERSION = '1.4.1';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
@@ -12,7 +12,7 @@ var AutoFestival = class extends MultUtil {
         pendingTimeoutMs: 120000,
         donorMinResource: 100,      // Mínimo absoluto para considerar como doador
         donorFixedAmount: 500,      // ENVIA EXATAMENTE ATÉ 500 de cada recurso por viagem
-        minSendTotal: 150,          // Mínimo total de recursos por envio (evita viagens de 10/10/10)
+        minSendTotal: 150,          // Mínimo total de recursos por envio (evita viagens inúteis)
         logLimit: 80,
         academyMinLevel: 30,
     });
@@ -101,7 +101,7 @@ var AutoFestival = class extends MultUtil {
                     '<span class="mbhudf-label">Protocolo de Prioridade Única</span>' +
                     '<div class="mbhudf-desc">' +
                         '1. Foca na <b>1ª cidade</b> da fila sem festival e sem recursos.<br>' +
-                        '2. <b>Todas as doadoras</b> enviam remessas de <b>até 500 fixos</b> de cada recurso.<br>' +
+                        '2. <b>Todas as doadoras</b> (mesmo as que aguardam) enviam remessas de <b>até 500 fixos</b>.<br>' +
                         '3. Só avança para a 2ª cidade quando a 1ª atingir <b>🪵15k · 🪨18k · ⚙15k</b>.<br>' +
                         '4. Limpeza automática de pendências ao atingir a meta.' +
                     '</div>' +
@@ -292,7 +292,6 @@ var AutoFestival = class extends MultUtil {
         this._cleanPending();
         const all = this._getAllTowns();
         const eligible = all.filter(t => this._canDoFestival(t.id));
-        // ORDENAÇÃO CRÍTICA: Prioriza as que NÃO têm festival e NÃO têm recursos (0 = prioridade máxima)
         eligible.sort((a, b) => {
             const aScore = this._hasActiveFestival(a.id) ? 2 : (this._hasEnoughResources(a.id) ? 1 : 0);
             const bScore = this._hasActiveFestival(b.id) ? 2 : (this._hasEnoughResources(b.id) ? 1 : 0);
@@ -309,29 +308,21 @@ var AutoFestival = class extends MultUtil {
 
         for (const t of towns) {
             const tid = t.id;
-
-            // 1. Se já tem festival, ignora e limpa pendências
             if (this._hasActiveFestival(tid)) {
                 if (pending[tid]) { delete pending[tid]; dirty = true; }
                 continue;
             }
-
-            // 2. Se já tem recursos suficientes, ignora, limpa pendências e deixa o loop passar para a PRÓXIMA
             if (this._hasEnoughResources(tid)) {
                 if (pending[tid]) { delete pending[tid]; dirty = true; }
                 continue;
             }
-
-            // 3. Se está sendo processada agora, ignora para não duplicar comandos
             if (this._sendingQueue[tid]) continue;
-
-            // 4. Encontrou a PRIMEIRA cidade que precisa. Retorna ela (1 de cada vez).
+            
             if (dirty) this._savePending(pending);
-            return tid;
+            return tid; // RETORNA A PRIMEIRA QUE PRECISA (PRIORIDADE MÁXIMA)
         }
-
         if (dirty) this._savePending(pending);
-        return null; // Nenhuma cidade precisa
+        return null;
     }
 
     _getDonorTowns(targetId) {
@@ -340,20 +331,22 @@ var AutoFestival = class extends MultUtil {
         for (const t of all) {
             const tid = t.id;
             if (tid === targetId) continue;
+            
+            // Preserva cidades que já concluíram o festival (opcional: remova esta linha se quiser que elas também doem)
             if (this._hasActiveFestival(tid)) continue;
-            if (this._canDoFestival(tid) && !this._hasEnoughResources(tid)) continue; // Não tirar de quem também precisa
+
+            // ✅ CORREÇÃO CRÍTICA: Removido o bloqueio que impedia cidades "Aguardar" de doar.
+            // Agora, cidades que também precisam podem doar seus excedentes para a cidade alvo prioritária.
 
             const res = this._getResources(tid);
             if (!res) continue;
 
-            // FILTRO: Só considera se tiver pelo menos 100 de algum recurso
             if (res.wood < this.CONFIG.donorMinResource && res.stone < this.CONFIG.donorMinResource && res.iron < this.CONFIG.donorMinResource) continue;
 
-            // FILTRO DE CAPACIDADE: Evita falhas por comerciantes ocupados
             try {
                 const town = uw.ITowns.towns[tid];
                 const cap = town.getAvailableTradeCapacity ? town.getAvailableTradeCapacity() : 99999;
-                if (cap < 100) continue; // Precisa de pelo menos 1 comerciante livre
+                if (cap < 100) continue; 
             } catch(e) {}
 
             donors.push(tid);
@@ -389,11 +382,9 @@ var AutoFestival = class extends MultUtil {
         if (uw.$('.botcheck').length || uw.$('#recaptcha_window').length) return;
 
         try {
-            // Limpeza geral de pendências resolvidas
             const allTowns = this._getAllTowns();
             for (const t of allTowns) this._checkAndClearPending(t.id);
 
-            // Obtém a PRIMEIRA cidade que precisa (garante 1 de cada vez)
             const targetId = this._getTargetTown();
             if (!targetId) {
                 this._log('✅ Todas as cidades elegíveis estão abastecidas ou com festival ativo.', 'ok');
@@ -403,11 +394,8 @@ var AutoFestival = class extends MultUtil {
             }
 
             const targetName = this.getTownName(targetId);
-            
-            // Trava a cidade na fila de processamento
             this._sendingQueue[targetId] = true;
 
-            // Verificação de segurança: se por algum motivo ela já estiver completa, libera e sai
             if (this._hasEnoughResources(targetId)) {
                 this._log(`🎯 ${targetName} já está completa. Passando para a próxima...`, 'ok');
                 this._checkAndClearPending(targetId);
@@ -426,14 +414,12 @@ var AutoFestival = class extends MultUtil {
                 return;
             }
 
-            // Baralha doadores para não sobrecarregar sempre a mesma cidade
             donors.sort(() => Math.random() - 0.5);
 
             let sent = false;
             const totalSent = { wood: 0, stone: 0, iron: 0 };
 
             for (const donorId of donors) {
-                // Recalcula déficit em tempo real a cada doador
                 const currentTotal = this._getTotalResources(targetId);
                 const currentDeficit = {
                     wood: Math.max(0, this.CONFIG.cost.wood - currentTotal.wood),
@@ -442,7 +428,6 @@ var AutoFestival = class extends MultUtil {
                 };
                 const totalDeficit = currentDeficit.wood + currentDeficit.stone + currentDeficit.iron;
 
-                // SE A META JÁ FOI ATINGIDA, PARA IMEDIATAMENTE E DEIXA A PRÓXIMA CIDADE PARA O PRÓXIMO CICLO
                 if (totalDeficit <= 0) {
                     this._log(`🎯 Meta atingida em ${targetName}! Próxima cidade na fila.`, 'ok');
                     break;
@@ -451,7 +436,6 @@ var AutoFestival = class extends MultUtil {
                 const donorRes = this._getResources(donorId);
                 if (!donorRes) continue;
 
-                // LÓGICA DE 500 FIXOS: Tenta enviar 500 de cada, mas respeita o que falta e o que o doador tem
                 const sendAmount = {
                     wood: Math.min(this.CONFIG.donorFixedAmount, currentDeficit.wood, donorRes.wood),
                     stone: Math.min(this.CONFIG.donorFixedAmount, currentDeficit.stone, donorRes.stone),
@@ -459,8 +443,6 @@ var AutoFestival = class extends MultUtil {
                 };
 
                 const totalSend = sendAmount.wood + sendAmount.stone + sendAmount.iron;
-                
-                // Se o envio for muito pequeno, não vale a pena gastar comerciantes (pula para o próximo doador)
                 if (totalSend < this.CONFIG.minSendTotal) continue;
 
                 const ok = await this._sendResources(donorId, targetId, sendAmount);
@@ -483,14 +465,12 @@ var AutoFestival = class extends MultUtil {
                 }
             }
 
-            // Limpeza final e liberação da fila
             this._checkAndClearPending(targetId);
             delete this._sendingQueue[targetId];
             this._refreshUI();
 
         } catch (e) {
             this._log('Erro no ciclo: ' + (e?.message ?? e), 'error');
-            // Libera a fila em caso de erro para não travar o script
             for (const tid in this._sendingQueue) delete this._sendingQueue[tid];
         }
     }
