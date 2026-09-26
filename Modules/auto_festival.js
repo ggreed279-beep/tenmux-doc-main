@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════════════════
-// MODULE: AutoFestival v1.4.4 (Toggle ON/OFF + Auto-Stop ao concluir)
+// MODULE: AutoFestival v1.4.6 (Controlo manual ON/OFF + Auto-Stop só após concluir trabalho)
 // ═══════════════════════════════════════════════════════
 
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.4.4';
+    VERSION = '1.4.6';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
@@ -24,6 +24,8 @@ var AutoFestival = class extends MultUtil {
     _active = false;
     _intervalId = null;
     _sendingQueue = {};
+    _didWork = false;     // true se nesta ativação já processou/enviou recursos para algum alvo
+    _idleLogged = false;  // evita spam do log "a monitorizar" a cada ciclo
 
     constructor(c, s) {
         super(c, s);
@@ -46,6 +48,10 @@ var AutoFestival = class extends MultUtil {
             .mbhudf-header h2 { margin: 0; font-size: 14px; letter-spacing: 6px; text-transform: uppercase; color: #22d3ee; text-shadow: 0 0 12px rgba(34,211,238,0.7); font-weight: 700; }
             .mbhudf-header .sub { font-size: 9px; color: #4a5a6a; letter-spacing: 3px; margin-top: 5px; text-transform: uppercase; }
             .mbhudf-header .sub .live { color: #00ff88; text-shadow: 0 0 8px rgba(0,255,136,0.6); font-variant-numeric: tabular-nums; }
+            .mbhudf-status { display: inline-block; margin-top: 9px; padding: 4px 16px; border-radius: 12px; font-size: 10px; font-weight: 700; letter-spacing: 2.5px; text-transform: uppercase; border: 1px solid; }
+            .mbhudf-status.on { background: rgba(0,255,136,0.14); border-color: rgba(0,255,136,0.65); color: #00ff88; text-shadow: 0 0 10px rgba(0,255,136,0.9); box-shadow: 0 0 14px rgba(0,255,136,0.35); animation: mbhudf-pulse 2s ease-in-out infinite; }
+            .mbhudf-status.off { background: rgba(248,113,113,0.10); border-color: rgba(248,113,113,0.55); color: #f87171; text-shadow: 0 0 8px rgba(248,113,113,0.7); }
+            .mbhudf-title-active { color: #00ff88 !important; text-shadow: 0 0 10px rgba(0,255,136,0.8) !important; }
             .mbhudf-section { background: rgba(10,16,32,0.6); border: 1px solid rgba(34,211,238,0.2); border-radius: 4px; padding: 10px 12px; margin-bottom: 10px; }
             .mbhudf-label { display: block; font-size: 9px; letter-spacing: 2.5px; text-transform: uppercase; color: #22d3ee; margin-bottom: 8px; font-weight: 700; }
             .mbhudf-label::before { content: '▸ '; opacity: 0.7; }
@@ -98,6 +104,7 @@ var AutoFestival = class extends MultUtil {
                 '<div class="mbhudf-header">' +
                     '<h2>◆ FESTIVAL ENGINE ◆</h2>' +
                     '<div class="sub">500 FIXOS POR VIAGEM · <span class="live" id="ff-live-sync">--:--:--</span></div>' +
+                    '<div><span id="ff-status-pill" class="mbhudf-status ' + (this._active ? 'on' : 'off') + '">' + (this._active ? '● ATIVO' : '● PARADO') + '</span></div>' +
                 '</div>' +
                 '<div class="mbhudf-section">' +
                     '<span class="mbhudf-label">Protocolo de Prioridade Única</span>' +
@@ -107,7 +114,8 @@ var AutoFestival = class extends MultUtil {
                         '3. <b>PROTEÇÃO ANTI-LOOP:</b> Cidades que recebem recursos estão <b>BLOQUEADAS</b> para doar.<br>' +
                         '4. Só avança para a 2ª cidade quando a 1ª atingir <b>🪵15k · 🪨18k · ⚙15k</b>.<br>' +
                         '5. Limpeza automática de pendências ao atingir a meta.<br>' +
-                        '6. <b>DESLIGA AUTOMATICAMENTE</b> quando todas as cidades estiverem concluídas.' +
+                        '6. <b>TU CONTROLAS:</b> ON = fica ativo a monitorizar · OFF = para na hora.<br>' +
+                        '7. Depois de trabalhar e concluir tudo, <b>desliga-se sozinho</b>.' +
                     '</div>' +
                 '</div>' +
                 '<div class="mbhudf-section">' +
@@ -136,13 +144,15 @@ var AutoFestival = class extends MultUtil {
     start() {
         if (this._active) return;
         this._active = true;
+        this._didWork = false;
+        this._idleLogged = false;
         this.storage.save(this.STORAGE_KEY_ACTIVE, true);
         this._log('🎉 Iniciado. Modo de prioridade única (500 fixos + anti-loop) ativado.', 'ok');
         this._refreshUI();
-        this._main();
         this._intervalId = setInterval(() => {
             this._main().catch(e => this._log(`Erro ciclo: ${e?.message ?? e}`, 'error'));
         }, this.CONFIG.intervalMs);
+        this._main();
     }
 
     stop() {
@@ -157,7 +167,17 @@ var AutoFestival = class extends MultUtil {
     _refreshUI() {
         requestAnimationFrame(() => {
             const filter = this._active ? 'brightness(100%) saturate(186%) hue-rotate(241deg)' : '';
-            try { uw.$('#ff_title').css('filter', filter); } catch (e) {}
+            try {
+                uw.$('#ff_title').css('filter', filter);
+                uw.$('#ff_title').toggleClass('mbhudf-title-active', this._active);
+            } catch (e) {}
+            try {
+                const $pill = uw.$('#ff-status-pill');
+                if ($pill.length) {
+                    $pill.text(this._active ? '● ATIVO' : '● PARADO');
+                    $pill.attr('class', 'mbhudf-status ' + (this._active ? 'on' : 'off'));
+                }
+            } catch (e) {}
             const now = new Date();
             try { uw.$('#ff-live-sync').text(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`); } catch (e) {}
             const $status = uw.$('#ff_status'); if ($status.length) $status.html(this._buildStatusHtml());
@@ -405,11 +425,24 @@ var AutoFestival = class extends MultUtil {
 
             const targetId = this._getTargetTown();
             if (!targetId) {
-                // ALTERAÇÃO: Desativa automaticamente quando tudo estiver concluído (sem monitorização contínua)
-                this._log('✅ Todas as cidades elegíveis estão abastecidas ou com festival ativo. Módulo desativado.', 'ok');
-                this.stop();
+                if (this._didWork) {
+                    // Trabalhou e concluiu tudo → desliga automaticamente
+                    this._log('✅ Todas as cidades elegíveis estão abastecidas ou com festival ativo. Trabalho concluído. Módulo desativado.', 'ok');
+                    this.stop();
+                    return;
+                }
+                // Ligar manual com tudo concluído → respeita o ON e fica a monitorizar
+                if (!this._idleLogged) {
+                    this._idleLogged = true;
+                    this._log('⏳ Tudo concluído por agora. Módulo ATIVO a monitorizar — começa a enviar assim que alguma cidade precisar.', 'info');
+                }
+                this._refreshUI();
                 return;
             }
+
+            // Há trabalho a fazer a partir daqui
+            this._didWork = true;
+            this._idleLogged = false;
 
             const targetName = this.getTownName(targetId);
             this._sendingQueue[targetId] = true;
