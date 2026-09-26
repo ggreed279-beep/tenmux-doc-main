@@ -10,7 +10,7 @@
 //     depende do GameEvents.window.open - confirmado que essa
 //     janela especifica e "old style" e nao passa por la) e
 //     injeta um painel extra com data/hora de chegada desejada
-//     (data pre-preenchida com hoje).
+//     (data pre-preenchida com hoje NO FUSO ESCOLHIDO).
 //  3. Ao clicar "Agendar", le o "way_duration" (tempo de viagem)
 //     DIRETO DO DOM - ja calculado pelo proprio jogo, sem risco
 //     de formula errada - e calcula o horario de ENVIO
@@ -22,6 +22,13 @@
 //     poller de 5s continua rodando so como rede de seguranca
 //     (ex: caso a pagina tenha sido reaberta e o setTimeout
 //     original tenha se perdido).
+//
+//  FUSO HORARIO (novo): a data/hora de chegada introduzida e
+//  interpretada no fuso escolhido nas DEFINIÇÕES do modulo
+//  (ex: Argentina UTC-3), em vez do fuso do computador. Isto
+//  corrige o erro "too late" quando o PC esta num fuso diferente
+//  do que o jogo mostra. A conversao usa a API Intl (com horario
+//  de verao automatico) e a escolha fica gravada.
 //
 //  IMPORTANTE - limitacao de navegador: setTimeout em abas em
 //  SEGUNDO PLANO pode atrasar (throttling do navegador, ate 1+
@@ -52,6 +59,11 @@ var Sniper = class extends MultUtil {
     settings = () => {
         requestAnimationFrame(() => this._renderList());
 
+        const tzCurrent = this._getTimeZoneSetting();
+        const tzOptionsHtml = this._tzOptions().map(o =>
+            `<option value="${o.id}" ${o.id === tzCurrent ? 'selected' : ''}>${o.label}${o.id === 'local' ? '' : ' (' + this._tzOffsetLabel(o.id) + ')'}</option>`
+        ).join('');
+
         return `
         <div class="game_border" style="margin-bottom:20px;">
             <div class="game_border_top"></div><div class="game_border_bottom"></div>
@@ -65,12 +77,143 @@ var Sniper = class extends MultUtil {
             <div style="padding:0 10px 6px;font-size:11px;color:#8a5a2a;">
                 ⚠ ${this.t('sniper_background_warning')}
             </div>
+            <div style="padding:2px 10px 8px;font-size:11px;color:#5a3a0a;border-top:1px dashed rgba(163,128,63,0.4);border-bottom:1px dashed rgba(163,128,63,0.4);">
+                🌐 <b>Fuso horário do jogo:</b>
+                <select onchange="window.multBot.sniper.setTimeZone(this.value)" style="padding:2px 4px;border-radius:3px;border:1px solid #b8935a;font-size:11px;margin-left:4px;">
+                    ${tzOptionsHtml}
+                </select>
+                <div style="font-size:10px;color:#8a6a3a;margin-top:3px;">
+                    A data/hora de chegada que introduzires será interpretada neste fuso — escolhe o mesmo que o relógio do jogo te mostra (ex: Argentina = UTC−3). A escolha fica gravada.
+                </div>
+            </div>
             <div style="padding:0 10px 6px;display:flex;justify-content:flex-end;">
                 ${this.getButtonHtml('sniper_clear_done_btn', this.t('sniper_clear_done'), this.clearDone)}
             </div>
             <div id="sniper_list" style="padding:0 10px 10px;"></div>
         </div>`;
     };
+
+    // ─────────────────────────────────────────────────────────────
+    //  FUSO HORÁRIO
+    // ─────────────────────────────────────────────────────────────
+
+    _getTimeZoneSetting() {
+        try { return this.storage.load('sniper_timezone', 'local'); }
+        catch (e) { return 'local'; }
+    }
+
+    setTimeZone = (value) => {
+        try { this.storage.save('sniper_timezone', value); } catch (e) {}
+        this.console.log('[Sniper] Fuso horário alterado para: ' + this._tzFriendlyName());
+        // Atualiza as notas de fuso em painéis de ataque/apoio abertos
+        try {
+            document.querySelectorAll('.mult_sniper_tznote').forEach((el) => {
+                el.textContent = '🌐 ' + this._tzFriendlyName();
+            });
+        } catch (e) {}
+        this._renderList();
+    };
+
+    _tzOptions() {
+        return [
+            { id: 'local', label: 'Automático (computador)' },
+            { id: 'America/Argentina/Buenos_Aires', label: 'Argentina' },
+            { id: 'America/Sao_Paulo', label: 'Brasil — São Paulo/Brasília' },
+            { id: 'America/Manaus', label: 'Brasil — Manaus' },
+            { id: 'Europe/Lisbon', label: 'Portugal — Lisboa' },
+            { id: 'Europe/Madrid', label: 'Espanha — Madrid' },
+            { id: 'UTC', label: 'UTC' },
+        ];
+    }
+
+    _effectiveTimeZone() {
+        const v = this._getTimeZoneSetting();
+        if (v && v !== 'local') return v;
+        try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+        catch (e) { return 'UTC'; }
+    }
+
+    /* Offset (ms) entre um fuso IANA e o UTC num dado instante,
+       via Intl — lida com horário de verão automaticamente. */
+    _tzOffsetMs(timeZone, timestamp) {
+        try {
+            const dtf = new Intl.DateTimeFormat('en-US', {
+                timeZone, hour12: false,
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+            });
+            const parts = dtf.formatToParts(new Date(timestamp));
+            const map = {};
+            for (const p of parts) map[p.type] = p.value;
+            const asUTC = Date.UTC(+map.year, +map.month - 1, +map.day, (+map.hour) % 24, +map.minute, +map.second);
+            return asUTC - timestamp;
+        } catch (e) {
+            return -new Date(timestamp).getTimezoneOffset() * 60000;
+        }
+    }
+
+    /* Converte a data/hora introduzida (hora de parede) para um
+       timestamp absoluto, interpretando-a no fuso escolhido pelo
+       jogador — e não no fuso do computador. */
+    _wallClockToMs(dateStr, timeStr) {
+        try {
+            const t = timeStr.length === 5 ? timeStr + ':00' : timeStr;
+            const naive = Date.parse(`${dateStr}T${t}Z`);
+            if (isNaN(naive)) return NaN;
+            const tz = this._effectiveTimeZone();
+            let ts = naive - this._tzOffsetMs(tz, naive);
+            // Segunda passagem cobre transições de horário de verão
+            ts = naive - this._tzOffsetMs(tz, ts);
+            return ts;
+        } catch (e) {
+            return NaN;
+        }
+    }
+
+    _tzOffsetLabel(timeZone) {
+        try {
+            const offMin = Math.round(this._tzOffsetMs(timeZone, Date.now()) / 60000);
+            const sign = offMin >= 0 ? '+' : '−';
+            const abs = Math.abs(offMin);
+            const h = Math.floor(abs / 60);
+            const m = abs % 60;
+            return 'UTC' + sign + h + (m ? ':' + String(m).padStart(2, '0') : '');
+        } catch (e) { return 'UTC'; }
+    }
+
+    _tzFriendlyName() {
+        const v = this._getTimeZoneSetting();
+        if (v === 'local') return 'Computador (' + this._tzOffsetLabel(this._effectiveTimeZone()) + ')';
+        const opt = this._tzOptions().find(o => o.id === v);
+        return (opt ? opt.label : v) + ' (' + this._tzOffsetLabel(v) + ')';
+    }
+
+    /* Formata um timestamp absoluto no fuso escolhido — usado em
+       todas as horas mostradas ao jogador. */
+    _formatInTz(ms) {
+        try {
+            return new Date(ms).toLocaleString('pt-PT', { timeZone: this._effectiveTimeZone() });
+        } catch (e) {
+            return new Date(ms).toLocaleString();
+        }
+    }
+
+    /* "Hoje" no fuso escolhido (YYYY-MM-DD) — para pré-preencher
+       o campo de data do painel. */
+    _todayStrInTz() {
+        try {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: this._effectiveTimeZone(),
+                year: 'numeric', month: '2-digit', day: '2-digit',
+            }).formatToParts(new Date());
+            const map = {};
+            for (const p of parts) map[p.type] = p.value;
+            return `${map.year}-${map.month}-${map.day}`;
+        } catch (e) {
+            const d = new Date();
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+    }
 
     /* Observa a pagina inteira por qualquer elemento que apareca
        com a classe "attack_support_window" - a janela nativa de
@@ -109,8 +252,8 @@ var Sniper = class extends MultUtil {
             const targetId = match ? match[1] : null;
             if (!targetId) return;
 
-            const today = new Date();
-            const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+            // Data pré-preenchida com "hoje" NO FUSO ESCOLHIDO (não no fuso do PC)
+            const todayStr = this._todayStrInTz();
 
             const panelId = 'mult_sniper_panel_' + targetId;
             const panel = document.createElement('div');
@@ -130,6 +273,7 @@ var Sniper = class extends MultUtil {
                         <div class="caption js-caption">🎯 ${this.t('sniper_schedule_btn')}<div class="effect js-effect"></div></div>
                     </div>
                 </div>
+                <div class="mult_sniper_tznote" style="font-size:10px;color:#8a6a3a;margin-top:4px;">🌐 ${this._tzFriendlyName()}</div>
                 <div class="mult_sniper_status" style="font-size:10.5px;margin-top:5px;color:#5a3a0a;"></div>
 
                 <div style="margin-top:10px;border-top:1px solid rgba(163,128,63,0.4);padding-top:8px;">
@@ -381,8 +525,9 @@ var Sniper = class extends MultUtil {
                 return;
             }
 
-            const arrivalDate = new Date(`${dateVal}T${timeVal}`);
-            if (isNaN(arrivalDate.getTime())) {
+            // Interpreta a data/hora NO FUSO ESCOLHIDO (não no fuso do PC)
+            const arrivalMs = this._wallClockToMs(dateVal, timeVal);
+            if (isNaN(arrivalMs)) {
                 statusEl.textContent = this.t('sniper_invalid_datetime');
                 statusEl.style.color = '#c0392b';
                 return;
@@ -405,9 +550,10 @@ var Sniper = class extends MultUtil {
             // calculado (chegada - duracao), ja desde a primeira tentativa -
             // pedido explicito, pra ter folga em vez de mirar exatamente
             // no limite.
-            const sendAt = arrivalDate.getTime() - (durationSeconds * 1000) - this.EARLY_MARGIN_MS;
+            const sendAt = arrivalMs - (durationSeconds * 1000) - this.EARLY_MARGIN_MS;
             if (sendAt <= Date.now()) {
-                statusEl.textContent = this.t('sniper_too_late', { duration: this._formatDuration(durationSeconds) });
+                statusEl.textContent = this.t('sniper_too_late', { duration: this._formatDuration(durationSeconds) })
+                    + ' — chegada interpretada: ' + this._formatInTz(arrivalMs) + ' (' + this._tzFriendlyName() + ')';
                 statusEl.style.color = '#c0392b';
                 return;
             }
@@ -445,7 +591,7 @@ var Sniper = class extends MultUtil {
                 type: commandType,
                 composition,
                 sendAt,
-                arrivalAt: arrivalDate.getTime(),
+                arrivalAt: arrivalMs,
                 durationSeconds,
                 status: 'pending',
             };
@@ -455,13 +601,13 @@ var Sniper = class extends MultUtil {
             this._armTimeout(snipe);
 
             const compSummary = Object.entries(composition).map(([u, n]) => `${n}x ${this.getGameName('unit', u)}`).join(', ');
-            statusEl.innerHTML = '✓ ' + this.t('sniper_scheduled_ok', { time: arrivalDate.toLocaleString() });
+            statusEl.innerHTML = '✓ ' + this.t('sniper_scheduled_ok', { time: this._formatInTz(arrivalMs) });
             statusEl.style.color = '#1a6b2a';
             statusEl.style.fontWeight = 'bold';
 
             this.console.log('[Sniper] ' + this.t('sniper_scheduled_log', {
                 target: targetName, type: commandType, comp: compSummary,
-                send: new Date(sendAt).toLocaleString(), arrival: arrivalDate.toLocaleString()
+                send: this._formatInTz(sendAt), arrival: this._formatInTz(arrivalMs)
             }));
 
             this._renderList();
@@ -834,7 +980,7 @@ var Sniper = class extends MultUtil {
                     <div>
                         <div style="font-weight:bold;color:#3a2a0a;">${typeIcon} ${s.targetName}</div>
                         <div style="color:#6a5a3a;margin-top:1px;">${compSummary}</div>
-                        <div style="color:#8a7a5a;font-size:10.5px;margin-top:2px;">${this.t('sniper_row_arrival', { time: new Date(s.arrivalAt).toLocaleString() })}</div>
+                        <div style="color:#8a7a5a;font-size:10.5px;margin-top:2px;">${this.t('sniper_row_arrival', { time: this._formatInTz(s.arrivalAt) })}</div>
                     </div>
                     <div style="text-align:right;white-space:nowrap;">
                         <span style="background:${st.bg};color:${st.fg};padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10.5px;">${st.label}</span>
