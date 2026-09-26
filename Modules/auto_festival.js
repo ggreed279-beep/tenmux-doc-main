@@ -1,17 +1,17 @@
-// ══════════════════════════════════════════════════════
-//  MODULE: AutoFestival v1.3.0 (Cyberpunk Pro Edition)
-//  Lógica de Envio: Lotes de 500 Recursos Fixos
-// ══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// MODULE: AutoFestival v1.2.0 (HUD Edition - 500 Fixed)
+// ═══════════════════════════════════════════════════════
+
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.3.0';
+    VERSION = '1.2.0';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
         cost: { wood: 15000, stone: 18000, iron: 15000 },
         intervalMs: 30000,
         pendingTimeoutMs: 120000,
-        donorMinResource: 500,
-        fixedSendAmount: 500, // VALOR DEFINIDO: 500 de cada
+        donorMinResource: 500,      // Mínimo que o doador precisa ter
+        donorFixedAmount: 500,      // ⬅️ NOVO: Envia 500 fixos de cada recurso
         minSendTotal: 100,
         logLimit: 80,
         academyMinLevel: 30,
@@ -24,6 +24,7 @@ var AutoFestival = class extends MultUtil {
     _active = false;
     _intervalId = null;
     _sendingQueue = {};
+    _lastStatusUpdate = 0;
 
     constructor(c, s) {
         super(c, s);
@@ -32,202 +33,829 @@ var AutoFestival = class extends MultUtil {
         }
     }
 
+    // ══════════════════════════════════════════════════
+    //  ESTILOS HUD (injetados uma só vez)
+    // ══════════════════════════════════════════════════
     _injectStyles() {
         if (uw.$('#mbhud-festival-styles').length) return;
         const css = `
-            @keyframes mbhudf-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(1.25); } }
-            @keyframes mbhudf-scan { 0% { background-position: 200% 0%; } 100% { background-position: -200% 0%; } }
-            @keyframes mbhudf-fade { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
-            .mbhudf-root { background: linear-gradient(135deg, #060816 0%, #0a1020 50%, #060816 100%); border: 1px solid rgba(34,211,238,0.35); border-radius: 6px; padding: 12px; font-family: 'SF Mono','Consolas',monospace; color: #a8b8d0; box-shadow: 0 0 24px rgba(34,211,238,0.15); position: relative; overflow: hidden; animation: mbhudf-fade 0.35s ease; margin-bottom: 20px; }
-            .mbhudf-root::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, #22d3ee, transparent); background-size: 200% 100%; animation: mbhudf-scan 3.5s linear infinite; pointer-events: none; }
-            .mbhudf-header { text-align: center; padding: 4px 0 12px; border-bottom: 1px solid rgba(34,211,238,0.2); margin-bottom: 12px; position: relative; z-index: 1; }
-            .mbhudf-header h2 { margin: 0; font-size: 14px; letter-spacing: 6px; text-transform: uppercase; color: #22d3ee; text-shadow: 0 0 12px rgba(34,211,238,0.7); font-weight: 700; }
-            .mbhudf-section { background: rgba(10,16,32,0.6); border: 1px solid rgba(34,211,238,0.2); border-radius: 4px; padding: 10px 12px; margin-bottom: 10px; position: relative; z-index: 1; }
-            .mbhudf-label { display: block; font-size: 9px; letter-spacing: 2.5px; text-transform: uppercase; color: #22d3ee; margin-bottom: 8px; font-weight: 700; }
-            .mbhudf-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 6px; }
-            .mbhudf-stat { background: rgba(0,0,0,0.35); border: 1px solid rgba(34,211,238,0.18); border-radius: 4px; padding: 6px 8px; text-align: center; }
-            .mbhudf-stat .n { font-size: 18px; font-weight: 700; color: #22d3ee; }
-            .mbhudf-stat .t { font-size: 8px; color: #5a6a7a; text-transform: uppercase; margin-top: 2px; }
-            .mbhudf-townlist { max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.25); border: 1px solid rgba(34,211,238,0.12); padding: 2px; }
-            .mbhudf-town { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid rgba(34,211,238,0.08); font-size: 11px; }
-            .mbhudf-pill { padding: 3px 9px; border-radius: 12px; font-size: 8px; font-weight: 700; text-transform: uppercase; border: 1px solid; }
-            .mbhudf-pill.ready { background: rgba(0,255,136,0.12); border-color: rgba(0,255,136,0.5); color: #00ff88; }
-            .mbhudf-pill.active { background: rgba(34,211,238,0.14); border-color: rgba(34,211,238,0.55); color: #22d3ee; animation: mbhudf-pulse 2s infinite; }
-            .mbhudf-log { font-size: 10px; max-height: 120px; overflow-y: auto; background: rgba(0,0,0,0.35); padding: 6px 8px; }
-            .mbhudf-log .ln { display: flex; gap: 6px; margin-bottom: 2px; }
-            .mbhudf-log .ts { color: #4a5a6a; flex-shrink: 0; }
-            .mbhudf-log .ok { color: #00ff88; }
-            .mbhudf-log .error { color: #f87171; }
+            @keyframes mbhudf-pulse {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.55; transform: scale(1.25); }
+            }
+            @keyframes mbhudf-scan {
+                0%   { background-position: 200% 0%; }
+                100% { background-position: -200% 0%; }
+            }
+            @keyframes mbhudf-fade {
+                from { opacity: 0; transform: translateY(-3px); }
+                to   { opacity: 1; transform: translateY(0); }
+            }
+
+            .mbhudf-root {
+                background: linear-gradient(135deg, #060816 0%, #0a1020 50%, #060816 100%);
+                border: 1px solid rgba(34,211,238,0.35);
+                border-radius: 6px;
+                padding: 12px;
+                font-family: 'SF Mono','Consolas','Monaco','Menlo',monospace;
+                color: #a8b8d0;
+                box-shadow: 0 0 24px rgba(34,211,238,0.15), inset 0 0 60px rgba(34,211,238,0.03);
+                position: relative;
+                overflow: hidden;
+                animation: mbhudf-fade 0.35s ease;
+                margin-bottom: 20px;
+            }
+            .mbhudf-root::before {
+                content: '';
+                position: absolute;
+                top: 0; left: 0; right: 0; height: 2px;
+                background: linear-gradient(90deg, transparent, #22d3ee, transparent);
+                background-size: 200% 100%;
+                animation: mbhudf-scan 3.5s linear infinite;
+                pointer-events: none;
+            }
+            .mbhudf-root::after {
+                content: '';
+                position: absolute;
+                inset: 0;
+                background-image:
+                    linear-gradient(rgba(34,211,238,0.035) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(34,211,238,0.035) 1px, transparent 1px);
+                background-size: 22px 22px;
+                pointer-events: none;
+                opacity: 0.5;
+            }
+
+            .mbhudf-header {
+                text-align: center;
+                padding: 4px 0 12px;
+                border-bottom: 1px solid rgba(34,211,238,0.2);
+                margin-bottom: 12px;
+                position: relative;
+                z-index: 1;
+            }
+            .mbhudf-header h2 {
+                margin: 0;
+                font-size: 14px;
+                letter-spacing: 6px;
+                text-transform: uppercase;
+                color: #22d3ee;
+                text-shadow: 0 0 12px rgba(34,211,238,0.7), 0 0 26px rgba(34,211,238,0.3);
+                font-weight: 700;
+                font-family: inherit;
+            }
+            .mbhudf-header .sub {
+                font-size: 9px;
+                color: #4a5a6a;
+                letter-spacing: 3px;
+                margin-top: 5px;
+                text-transform: uppercase;
+            }
+            .mbhudf-header .sub .live {
+                color: #00ff88;
+                text-shadow: 0 0 8px rgba(0,255,136,0.6);
+                font-variant-numeric: tabular-nums;
+            }
+
+            .mbhudf-section {
+                background: rgba(10,16,32,0.6);
+                border: 1px solid rgba(34,211,238,0.2);
+                border-radius: 4px;
+                padding: 10px 12px;
+                margin-bottom: 10px;
+                position: relative;
+                z-index: 1;
+            }
+            .mbhudf-label {
+                display: block;
+                font-size: 9px;
+                letter-spacing: 2.5px;
+                text-transform: uppercase;
+                color: #22d3ee;
+                margin-bottom: 8px;
+                text-shadow: 0 0 8px rgba(34,211,238,0.6);
+                font-weight: 700;
+            }
+            .mbhudf-label::before { content: '▸ '; opacity: 0.7; }
+
+            .mbhudf-desc {
+                font-size: 10px;
+                color: #6a7a8a;
+                line-height: 1.7;
+                letter-spacing: 0.3px;
+            }
+            .mbhudf-desc b {
+                color: #22d3ee;
+                text-shadow: 0 0 6px rgba(34,211,238,0.45);
+                font-weight: 700;
+            }
+
+            .mbhudf-stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+                gap: 6px;
+            }
+            .mbhudf-stat {
+                background: rgba(0,0,0,0.35);
+                border: 1px solid rgba(34,211,238,0.18);
+                border-radius: 4px;
+                padding: 6px 8px;
+                text-align: center;
+                transition: all 0.2s;
+            }
+            .mbhudf-stat .n {
+                font-size: 18px;
+                font-weight: 700;
+                line-height: 1.1;
+                font-variant-numeric: tabular-nums;
+                text-shadow: 0 0 8px currentColor;
+            }
+            .mbhudf-stat .t {
+                font-size: 8px;
+                letter-spacing: 2px;
+                text-transform: uppercase;
+                color: #5a6a7a;
+                margin-top: 2px;
+            }
+            .mbhudf-stat.on   .n { color: #00ff88; }
+            .mbhudf-stat.info .n { color: #22d3ee; }
+            .mbhudf-stat.warn .n { color: #ffb020; }
+            .mbhudf-stat.pend .n { color: #a78bfa; }
+
+            .mbhudf-townlist {
+                max-height: 220px;
+                overflow-y: auto;
+                border-radius: 4px;
+                background: rgba(0,0,0,0.25);
+                border: 1px solid rgba(34,211,238,0.12);
+                padding: 2px;
+                scrollbar-width: thin;
+                scrollbar-color: rgba(34,211,238,0.3) transparent;
+            }
+            .mbhudf-townlist::-webkit-scrollbar { width: 8px; }
+            .mbhudf-townlist::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+            .mbhudf-townlist::-webkit-scrollbar-thumb {
+                background: rgba(34,211,238,0.3);
+                border-radius: 4px;
+            }
+
+            .mbhudf-town {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 8px;
+                border-bottom: 1px solid rgba(34,211,238,0.08);
+                font-size: 11px;
+                transition: background 0.2s;
+                font-family: inherit;
+            }
+            .mbhudf-town:last-child { border-bottom: none; }
+            .mbhudf-town:hover { background: rgba(34,211,238,0.05); }
+            .mbhudf-town .star {
+                color: #ffb020;
+                text-shadow: 0 0 8px rgba(255,176,32,0.6);
+                font-size: 12px;
+                width: 12px;
+                text-align: center;
+                flex-shrink: 0;
+            }
+            .mbhudf-town .name {
+                color: #e8f0ff;
+                font-weight: 700;
+                letter-spacing: 0.3px;
+                flex: 1;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                min-width: 0;
+            }
+            .mbhudf-town .res {
+                color: #6a7a8a;
+                font-size: 10px;
+                font-variant-numeric: tabular-nums;
+                white-space: nowrap;
+                letter-spacing: 0.2px;
+            }
+            .mbhudf-town .res .pend {
+                color: #a78bfa;
+                margin-left: 3px;
+            }
+
+            .mbhudf-pill {
+                padding: 3px 9px;
+                border-radius: 12px;
+                font-size: 8px;
+                font-weight: 700;
+                letter-spacing: 1.2px;
+                text-transform: uppercase;
+                border: 1px solid;
+                white-space: nowrap;
+                flex-shrink: 0;
+                font-family: inherit;
+            }
+            .mbhudf-pill.ready {
+                background: rgba(0,255,136,0.12);
+                border-color: rgba(0,255,136,0.5);
+                color: #00ff88;
+                text-shadow: 0 0 6px rgba(0,255,136,0.4);
+            }
+            .mbhudf-pill.active {
+                background: rgba(34,211,238,0.14);
+                border-color: rgba(34,211,238,0.55);
+                color: #22d3ee;
+                text-shadow: 0 0 6px rgba(34,211,238,0.45);
+                animation: mbhudf-pulse 2s ease-in-out infinite;
+            }
+            .mbhudf-pill.waiting {
+                background: rgba(255,176,32,0.10);
+                border-color: rgba(255,176,32,0.45);
+                color: #ffb020;
+                text-shadow: 0 0 6px rgba(255,176,32,0.4);
+            }
+
+            .mbhudf-led {
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                flex-shrink: 0;
+                border: 1px solid rgba(255,255,255,0.08);
+            }
+            .mbhudf-led.ready {
+                background: #00ff88;
+                box-shadow: 0 0 8px #00ff88, 0 0 14px rgba(0,255,136,0.55);
+                animation: mbhudf-pulse 2s ease-in-out infinite;
+            }
+            .mbhudf-led.active {
+                background: #22d3ee;
+                box-shadow: 0 0 8px #22d3ee, 0 0 14px rgba(34,211,238,0.55);
+                animation: mbhudf-pulse 1.4s ease-in-out infinite;
+            }
+            .mbhudf-led.waiting {
+                background: #ffb020;
+                box-shadow: 0 0 8px #ffb020;
+                animation: mbhudf-pulse 1.8s ease-in-out infinite;
+            }
+
+            .mbhudf-log {
+                font-size: 10px;
+                line-height: 1.7;
+                max-height: 120px;
+                overflow-y: auto;
+                background: rgba(0,0,0,0.35);
+                border: 1px solid rgba(34,211,238,0.12);
+                border-radius: 4px;
+                padding: 6px 8px;
+                letter-spacing: 0.2px;
+                font-family: inherit;
+                scrollbar-width: thin;
+                scrollbar-color: rgba(34,211,238,0.3) transparent;
+            }
+            .mbhudf-log::-webkit-scrollbar { width: 8px; }
+            .mbhudf-log::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+            .mbhudf-log::-webkit-scrollbar-thumb {
+                background: rgba(34,211,238,0.3);
+                border-radius: 4px;
+            }
+            .mbhudf-log .ln { display: flex; gap: 6px; }
+            .mbhudf-log .ts {
+                color: #4a5a6a;
+                font-variant-numeric: tabular-nums;
+                flex-shrink: 0;
+            }
+            .mbhudf-log .msg { flex: 1; word-break: break-word; }
+            .mbhudf-log .ln.info  .msg { color: #a8b8d0; }
+            .mbhudf-log .ln.ok    .msg { color: #00ff88; text-shadow: 0 0 6px rgba(0,255,136,0.3); }
+            .mbhudf-log .ln.warn  .msg { color: #ffb020; text-shadow: 0 0 6px rgba(255,176,32,0.3); }
+            .mbhudf-log .ln.error .msg { color: #f87171; text-shadow: 0 0 6px rgba(248,113,113,0.3); }
+
+            .mbhudf-empty {
+                text-align: center;
+                color: #4a5a6a;
+                font-size: 10px;
+                padding: 12px 8px;
+                letter-spacing: 0.4px;
+                font-style: italic;
+            }
         `;
         uw.$('<style id="mbhud-festival-styles">').text(css).appendTo('head');
     }
 
+    // ══════════════════════════════════════════════════
+    //  UI
+    // ══════════════════════════════════════════════════
     settings = () => {
         this._injectStyles();
-        return '<div class="mbhudf-root">' +
-               '<div class="mbhudf-header"><h2>◆ FESTIVAL ENGINE ◆</h2></div>' +
-               '<div class="mbhudf-section"><span class="mbhudf-label">Protocolo</span><div class="mbhudf-desc" style="font-size:10px; color:#6a7a8a;">Alvo: 🪵15k 🪨18k ⚙15k. Envio Lote: 500.</div></div>' +
-               '<div class="mbhudf-section"><span class="mbhudf-label">Telemetria</span><div class="mbhudf-stats" id="ff_status"></div></div>' +
-               '<div class="mbhudf-section"><span class="mbhudf-label">Cidades Elegíveis</span><div class="mbhudf-townlist" id="ff_town_list"></div></div>' +
-               '<div class="mbhudf-section"><span class="mbhudf-label">Registo</span><div class="mbhudf-log" id="ff_log"></div></div>' +
-               '</div>';
+        requestAnimationFrame(() => this._refreshUI());
+        return (
+            '<div class="game_border" style="margin-bottom:20px;">' +
+            '<div class="game_border_top"></div><div class="game_border_bottom"></div>' +
+            '<div class="game_border_left"></div><div class="game_border_right"></div>' +
+            '<div class="game_border_corner corner1"></div><div class="game_border_corner corner2"></div>' +
+            '<div class="game_border_corner corner3"></div><div class="game_border_corner corner4"></div>' +
+            this.getTitleHtml('ff_title', 'Auto Festival de Recursos', this.toggle, '', this._active) +
+            '<div class="mbhudf-root">' +
+                '<div class="mbhudf-header">' +
+                    '<h2>◆ FESTIVAL ENGINE ◆</h2>' +
+                    '<div class="sub">AUTO-RESOURCE TRANSFER · <span class="live" id="ff-live-sync">--:--:--</span></div>' +
+                '</div>' +
+
+                '<div class="mbhudf-section">' +
+                    '<span class="mbhudf-label">Protocolo</span>' +
+                    '<div class="mbhudf-desc">' +
+                        'Cidades com <b>ACADEMIA ≥ 30</b>. Envio automático de <b>500 fixos</b> de cada recurso ' +
+                        'para a primeira que precisa, priorizando as <b>SEM FESTIVAL</b>. Pendentes rastreados. Alvo: ' +
+                        '<b>🪵 15k · 🪨 18k · ⚙ 15k</b>. Auto-stop quando não há mais cidades.' +
+                    '</div>' +
+                '</div>' +
+
+                '<div class="mbhudf-section">' +
+                    '<span class="mbhudf-label">Telemetria</span>' +
+                    '<div class="mbhudf-stats" id="ff_status">' + this._buildStatusHtml() + '</div>' +
+                '</div>' +
+
+                '<div class="mbhudf-section">' +
+                    '<span class="mbhudf-label">Cidades Elegíveis</span>' +
+                    '<div class="mbhudf-townlist" id="ff_town_list">' + this._buildTownListHtml() + '</div>' +
+                '</div>' +
+
+                '<div class="mbhudf-section">' +
+                    '<span class="mbhudf-label">Registo de Operações</span>' +
+                    '<div class="mbhudf-log" id="ff_log">' + this._buildLogHtml() + '</div>' +
+                '</div>' +
+            '</div>' +
+            '</div>'
+        );
     };
 
-    toggle = () => { this._active ? this.stop() : this.start(); };
+    toggle = () => {
+        if (this._active) this.stop();
+        else this.start();
+    };
 
     start() {
         if (this._active) return;
         this._active = true;
         this.storage.save(this.STORAGE_KEY_ACTIVE, true);
-        this._log('🎉 Iniciado.', 'ok');
+        this._log('🎉 Iniciado. A enviar 500 fixos de cada recurso para cidades que precisam...');
+        this._refreshUI();
         this._main();
-        this._intervalId = setInterval(() => { this._main().catch(e => this._log(`Erro: ${e}`, 'error')); }, this.CONFIG.intervalMs);
+        this._intervalId = setInterval(() => {
+            this._main().catch(e => this._log(`Erro ciclo: ${e?.message ?? e}`));
+        }, this.CONFIG.intervalMs);
     }
 
     stop() {
+        if (!this._active) return;
         this._active = false;
         this.storage.save(this.STORAGE_KEY_ACTIVE, false);
-        if (this._intervalId) clearInterval(this._intervalId);
+        if (this._intervalId) { clearInterval(this._intervalId); this._intervalId = null; }
         this._log('Parado.');
-    }
-
-    _log(message, level = 'info') {
-        const logs = this.storage.load(this.STORAGE_KEY_LOGS, []);
-        logs.unshift({ at: Date.now(), level, message });
-        this.storage.save(this.STORAGE_KEY_LOGS, logs.slice(0, this.CONFIG.logLimit));
         this._refreshUI();
     }
 
     _refreshUI() {
-        uw.$('#ff_status').html(this._buildStatusHtml());
-        uw.$('#ff_town_list').html(this._buildTownListHtml());
-        uw.$('#ff_log').html(this._buildLogHtml());
+        requestAnimationFrame(() => {
+            const filter = this._active ? 'brightness(100%) saturate(186%) hue-rotate(241deg)' : '';
+            try { uw.$('#ff_title').css('filter', filter); } catch (e) {}
+
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            const ss = String(now.getSeconds()).padStart(2, '0');
+            try { uw.$('#ff-live-sync').text(`${hh}:${mm}:${ss}`); } catch (e) {}
+
+            const $status = uw.$('#ff_status');
+            if ($status.length) $status.html(this._buildStatusHtml());
+
+            const $list = uw.$('#ff_town_list');
+            if ($list.length) $list.html(this._buildTownListHtml());
+
+            const $log = uw.$('#ff_log');
+            if ($log.length) $log.html(this._buildLogHtml());
+        });
     }
 
-    _buildStatusHtml() {
-        const towns = this._scanTowns();
-        return `<div class="mbhudf-stat"><div class="n">${towns.length}</div><div class="t">Elegíveis</div></div>`;
-    }
+    _log(message, level = 'info') {
+        try { this.console.log(`${this.PREFIX} ${message}`); } catch (e) {}
 
-    _buildTownListHtml() {
-        const towns = this._scanTowns();
-        if (!towns.length) return '<div style="font-size:10px;">Nenhuma cidade.</div>';
-        return towns.map(t => `<div class="mbhudf-town"><span class="name">${t.name}</span><span class="mbhudf-pill ready">Monitor</span></div>`).join('');
+        try {
+            const logs = this.storage.load(this.STORAGE_KEY_LOGS, []);
+            logs.unshift({ at: Date.now(), level, message });
+            this.storage.save(this.STORAGE_KEY_LOGS, logs.slice(0, this.CONFIG.logLimit));
+        } catch (e) {}
+
+        try {
+            const $log = uw.$('#ff_log');
+            if ($log.length) $log.html(this._buildLogHtml());
+        } catch (e) {}
     }
 
     _buildLogHtml() {
         const logs = this.storage.load(this.STORAGE_KEY_LOGS, []);
+        if (!logs.length) return '<div class="mbhudf-empty">// sem registos //</div>';
         return logs.map(e => {
             const d = new Date(e.at);
-            const ts = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`;
-            return `<div class="ln ${e.level}"><span class="ts">${ts}</span><span>${e.message}</span></div>`;
+            const ts = ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+            const level = e.level || 'info';
+            const msg = String(e.message).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+            return `<div class="ln ${level}"><span class="ts">${ts}</span><span class="msg">${msg}</span></div>`;
         }).join('');
     }
 
-    async _main() {
-        if (!this._active) return;
-        try {
-            const targetId = this._getTargetTown();
-            if (!targetId) {
-                this._log('Nenhuma cidade precisa de recursos.', 'info');
-                return;
-            }
-
-            const targetName = this.getTownName(targetId);
-            const donors = this._getDonorTowns(targetId);
-
-            if (!donors.length) {
-                this._log('Sem doadores para ' + targetName, 'error');
-                return;
-            }
-
-            for (const donorId of donors) {
-                const currentTotal = this._getTotalResources(targetId);
-                const deficit = {
-                    wood: Math.max(0, this.CONFIG.cost.wood - currentTotal.wood),
-                    stone: Math.max(0, this.CONFIG.cost.stone - currentTotal.stone),
-                    iron: Math.max(0, this.CONFIG.cost.iron - currentTotal.iron),
-                };
-
-                if (deficit.wood + deficit.stone + deficit.iron <= 0) break;
-
-                const donorRes = this._getResources(donorId);
-                
-                // LÓGICA DOS 500 RECURSOS
-                const sendAmount = {
-                    wood: Math.min(Math.floor(donorRes.wood), deficit.wood, this.CONFIG.fixedSendAmount),
-                    stone: Math.min(Math.floor(donorRes.stone), deficit.stone, this.CONFIG.fixedSendAmount),
-                    iron: Math.min(Math.floor(donorRes.iron), deficit.iron, this.CONFIG.fixedSendAmount),
-                };
-
-                if (sendAmount.wood + sendAmount.stone + sendAmount.iron < this.CONFIG.minSendTotal) continue;
-
-                const ok = await this._sendResources(donorId, targetId, sendAmount);
-                if (ok) {
-                    this._log(`✓ ${this.getTownName(donorId)} → ${targetName} | 🪵${sendAmount.wood} 🪨${sendAmount.stone} ⚙${sendAmount.iron}`, 'ok');
-                    await new Promise(r => setTimeout(r, 1500));
-                } else {
-                    this._log('✗ Falha ao enviar de ' + this.getTownName(donorId), 'error');
-                }
-            }
-        } catch (e) {
-            this._log('Erro no ciclo: ' + e, 'error');
-        }
-        this._refreshUI();
-    }
-
-    _getTargetTown() {
+    _buildStatusHtml() {
         const towns = this._scanTowns();
-        for (const t of towns) {
-            if (this._hasActiveFestival(t.id)) continue;
-            if (this._hasEnoughResources(t.id)) continue;
-            return t.id;
+        const total = towns.length;
+        const active = towns.filter(t => this._hasActiveFestival(t.id)).length;
+        const ready = towns.filter(t => !this._hasActiveFestival(t.id) && this._hasEnoughResources(t.id)).length;
+        const waiting = towns.filter(t => !this._hasActiveFestival(t.id) && !this._hasEnoughResources(t.id)).length;
+        const pending = this._loadPending();
+        const pendingCount = Object.keys(pending).filter(tid =>
+            this._canDoFestival(tid) && !this._hasActiveFestival(tid)
+        ).length;
+
+        const mk = (val, label, cls) =>
+            `<div class="mbhudf-stat ${cls}"><div class="n">${val}</div><div class="t">${label}</div></div>`;
+
+        return (
+            mk(total, 'Elegíveis', 'on') +
+            mk(active, 'Com Festival', 'info') +
+            mk(ready, 'Prontas', 'on') +
+            mk(waiting, 'Aguardar', 'warn') +
+            mk(pendingCount, 'Pendentes', 'pend')
+        );
+    }
+
+    _buildTownListHtml() {
+        const towns = this._scanTowns();
+        if (!towns.length) {
+            return '<div class="mbhudf-empty">// nenhuma cidade com academia ≥ 30 //</div>';
         }
-        return null;
+
+        const pendingAll = this._loadPending();
+
+        return towns.map(t => {
+            const tid = t.id;
+            const hasActive = this._hasActiveFestival(tid);
+            const totalRes = this._getTotalResources(tid);
+            const currentRes = this._getResources(tid);
+            const pending = pendingAll[tid];
+
+            const hasResources = totalRes && totalRes.wood >= this.CONFIG.cost.wood &&
+                                 totalRes.stone >= this.CONFIG.cost.stone &&
+                                 totalRes.iron >= this.CONFIG.cost.iron;
+
+            let statusKey, statusText;
+            if (hasActive)          { statusKey = 'active';  statusText = '🎉 Ativo'; }
+            else if (hasResources)  { statusKey = 'ready';   statusText = '✅ Pronto'; }
+            else                    { statusKey = 'waiting'; statusText = '⏳ Precisa'; }
+
+            const resText = currentRes
+                ? `🪵${Math.floor(currentRes.wood)} 🪨${Math.floor(currentRes.stone)} ⚙${Math.floor(currentRes.iron)}`
+                : '—';
+            const pendingText = pending
+                ? `<span class="pend">+${Math.floor(pending.wood)}/${Math.floor(pending.stone)}/${Math.floor(pending.iron)}</span>`
+                : '';
+            const star = (!hasActive && !hasResources) ? '⭐' : '';
+            const safe = String(t.name).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+            return '<div class="mbhudf-town">' +
+                `<span class="star">${star}</span>` +
+                `<span class="mbhudf-led ${statusKey}"></span>` +
+                `<span class="name">${safe}</span>` +
+                `<span class="res">${resText}${pendingText}</span>` +
+                `<span class="mbhudf-pill ${statusKey}">${statusText}</span>` +
+                '</div>';
+        }).join('');
     }
 
-    _getDonorTowns(targetId) {
-        const all = this._getAllTowns();
-        return all.filter(t => t.id !== targetId && !this._hasActiveFestival(t.id) && this._getResources(t.id) > 500 ? t.id : false);
-    }
+    // ══════════════════════════════════════════════════
+    //  PERSISTÊNCIA
+    // ══════════════════════════════════════════════════
 
-    _getResources(tid) {
-        const town = uw.ITowns.towns[tid];
-        if (!town) return { wood: 0, stone: 0, iron: 0 };
-        const r = town.resources();
-        return { wood: r.wood || 0, stone: r.stone || 0, iron: r.iron || 0 };
-    }
+    _loadPending() { return this.storage.load(this.STORAGE_KEY_PENDING, {}); }
+    _savePending(p) { this.storage.save(this.STORAGE_KEY_PENDING, p); }
 
-    _getTotalResources(tid) {
-        const current = this._getResources(tid);
-        const pending = this._loadPending()[tid] || { wood: 0, stone: 0, iron: 0 };
-        return { wood: current.wood + pending.wood, stone: current.stone + pending.stone, iron: current.iron + pending.iron };
-    }
-
-    _hasEnoughResources(tid) {
-        const t = this._getTotalResources(tid);
-        return t.wood >= this.CONFIG.cost.wood && t.stone >= this.CONFIG.cost.stone && t.iron >= this.CONFIG.cost.iron;
-    }
+    // ══════════════════════════════════════════════════
+    //  GREPOLIS HELPERS
+    // ══════════════════════════════════════════════════
 
     _getAllTowns() {
         try {
-            return uw.MM.getOnlyCollectionByName('Town').models.map(m => ({ id: String(m.attributes.id), name: m.attributes.name }));
+            const models = uw.MM.getOnlyCollectionByName('Town').models;
+            return models.map(m => ({
+                id: String(m.attributes.id),
+                name: m.attributes.name || ('Cidade ' + m.attributes.id),
+            }));
         } catch (e) { return []; }
     }
 
     _canDoFestival(tid) {
         try {
             const town = uw.ITowns.towns[tid];
-            return town && town.getBuildings().attributes.academy >= this.CONFIG.academyMinLevel;
+            if (!town) return false;
+            const buildings = town.getBuildings().attributes;
+            return Boolean(buildings.academy && buildings.academy >= this.CONFIG.academyMinLevel);
         } catch (e) { return false; }
     }
 
     _hasActiveFestival(tid) {
         try {
             const celebrations = uw.MM.getModels().Celebration;
+            if (!celebrations) return false;
             for (const k in celebrations) {
-                if (celebrations[k].attributes.celebration_type === 'party' && String(celebrations[k].attributes.town_id) === String(tid)) return true;
+                const c = celebrations[k].attributes;
+                if (c.celebration_type === 'party' && String(c.town_id) === String(tid)) return true;
             }
             return false;
         } catch (e) { return false; }
     }
+
+    _getResources(tid) {
+        try {
+            const town = uw.ITowns.towns[tid];
+            if (!town) return null;
+            const r = town.resources();
+            return { wood: r.wood || 0, stone: r.stone || 0, iron: r.iron || 0 };
+        } catch (e) { return null; }
+    }
+
+    _getTotalResources(tid) {
+        const current = this._getResources(tid);
+        if (!current) return null;
+        const pending = this._loadPending()[tid] || { wood: 0, stone: 0, iron: 0 };
+        return {
+            wood: current.wood + pending.wood,
+            stone: current.stone + pending.stone,
+            iron: current.iron + pending.iron,
+        };
+    }
+
+    _hasEnoughResources(tid) {
+        const t = this._getTotalResources(tid);
+        if (!t) return false;
+        const c = this.CONFIG.cost;
+        return t.wood >= c.wood && t.stone >= c.stone && t.iron >= c.iron;
+    }
+
+    _checkAndClearPending(tid) {
+        const current = this._getResources(tid);
+        if (!current) return false;
+        const c = this.CONFIG.cost;
+        if (current.wood >= c.wood && current.stone >= c.stone && current.iron >= c.iron) {
+            const pending = this._loadPending();
+            if (pending[tid]) {
+                this._log('✓ ' + this.getTownName(tid) + ' recebeu tudo. Pendências limpas.', 'ok');
+                delete pending[tid];
+                this._savePending(pending);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    _cleanPending() {
+        const pending = this._loadPending();
+        const now = Date.now();
+        let dirty = false;
+        for (const tid in pending) {
+            if (now - (pending[tid].timestamp || 0) > this.CONFIG.pendingTimeoutMs) {
+                this._log('⏰ Pendências de ' + this.getTownName(tid) + ' expiradas.', 'warn');
+                delete pending[tid];
+                dirty = true;
+            }
+        }
+        if (dirty) this._savePending(pending);
+    }
+
+    // ══════════════════════════════════════════════════
+    //  TRIAGEM / ORDENAÇÃO
+    // ══════════════════════════════════════════════════
+
+    _anyCityNeedsResources() {
+        const all = this._getAllTowns();
+        for (const t of all) {
+            if (!this._canDoFestival(t.id)) continue;
+            if (this._hasActiveFestival(t.id)) continue;
+            if (this._hasEnoughResources(t.id)) continue;
+            return true;
+        }
+        return false;
+    }
+
+    _scanTowns() {
+        this._cleanPending();
+        const all = this._getAllTowns();
+        const eligible = all.filter(t => this._canDoFestival(t.id));
+
+        eligible.sort((a, b) => {
+            const aScore = this._hasActiveFestival(a.id) ? 2 : (this._hasEnoughResources(a.id) ? 1 : 0);
+            const bScore = this._hasActiveFestival(b.id) ? 2 : (this._hasEnoughResources(b.id) ? 1 : 0);
+            if (aScore !== bScore) return aScore - bScore;
+            return a.name.localeCompare(b.name);
+        });
+        return eligible;
+    }
+
+    _getTargetTown() {
+        const towns = this._scanTowns();
+        const pending = this._loadPending();
+        let dirty = false;
+
+        for (const t of towns) {
+            const tid = t.id;
+            if (this._hasActiveFestival(tid)) {
+                if (pending[tid]) { delete pending[tid]; dirty = true; }
+                continue;
+            }
+            if (this._checkAndClearPending(tid)) continue;
+            if (this._hasEnoughResources(tid)) continue;
+            if (this._sendingQueue[tid]) continue;
+            if (dirty) this._savePending(pending);
+            return tid;
+        }
+        if (dirty) this._savePending(pending);
+        return null;
+    }
+
+    _getDonorTowns(targetId) {
+        const all = this._getAllTowns();
+        const donors = [];
+        for (const t of all) {
+            const tid = t.id;
+            if (tid === targetId) continue;
+            if (this._hasActiveFestival(tid)) continue;
+            if (this._canDoFestival(tid) && !this._hasEnoughResources(tid)) continue;
+
+            const res = this._getResources(tid);
+            if (!res) continue;
+            // Doador precisa ter pelo menos 500 de algum recurso
+            if (res.wood < this.CONFIG.donorMinResource &&
+                res.stone < this.CONFIG.donorMinResource &&
+                res.iron < this.CONFIG.donorMinResource) continue;
+            donors.push(tid);
+        }
+        return donors;
+    }
+
+    // ══════════════════════════════════════════════════
+    //  AJAX
+    // ══════════════════════════════════════════════════
+
+    _sendResources(fromTownId, toTownId, amount) {
+        return new Promise(resolve => {
+            const data = {
+                id: parseInt(toTownId, 10),
+                wood: amount.wood || 0,
+                stone: amount.stone || 0,
+                iron: amount.iron || 0,
+                town_id: parseInt(fromTownId, 10),
+                nl_init: true,
+            };
+            const timer = setTimeout(() => resolve(false), 15000);
+            try {
+                uw.gpAjax.ajaxPost('town_info', 'trade', data, false,
+                    (res) => {
+                        clearTimeout(timer);
+                        resolve(Boolean(res && !res.error));
+                    },
+                    () => { clearTimeout(timer); resolve(false); }
+                );
+            } catch (e) { clearTimeout(timer); resolve(false); }
+        });
+    }
+
+    // ══════════════════════════════════════════════════
+    //  MAIN
+    // ══════════════════════════════════════════════════
+
+    async _main() {
+        if (!this._active) return;
+        if (uw.$('.botcheck').length || uw.$('#recaptcha_window').length) return;
+
+        try {
+            // 1) Limpa pendências em todas as cidades
+            const allTowns = this._getAllTowns();
+            for (const t of allTowns) this._checkAndClearPending(t.id);
+
+            // 2) Verifica se ainda há cidades precisando
+            if (!this._anyCityNeedsResources()) {
+                this._log('🎉 Todas as cidades elegíveis têm festival ativo ou recursos suficientes. A parar.', 'ok');
+                this._refreshUI();
+                this.stop();
+                return;
+            }
+
+            const targetId = this._getTargetTown();
+            if (!targetId) {
+                this._log('Nenhuma cidade precisa de recursos neste momento.');
+                this._refreshUI();
+                return;
+            }
+
+            const targetName = this.getTownName(targetId);
+            const totalRes = this._getTotalResources(targetId);
+            const deficit = {
+                wood: Math.max(0, this.CONFIG.cost.wood - totalRes.wood),
+                stone: Math.max(0, this.CONFIG.cost.stone - totalRes.stone),
+                iron: Math.max(0, this.CONFIG.cost.iron - totalRes.iron),
+            };
+            let totalDeficit = deficit.wood + deficit.stone + deficit.iron;
+
+            if (totalDeficit <= 0) {
+                this._log(targetName + ' já tem recursos suficientes.', 'ok');
+                const pending = this._loadPending();
+                if (pending[targetId]) { delete pending[targetId]; this._savePending(pending); }
+                this._refreshUI();
+                return;
+            }
+
+            this._sendingQueue[targetId] = true;
+
+            const donors = this._getDonorTowns(targetId);
+            if (!donors.length) {
+                this._log('Sem cidades com recursos para enviar para ' + targetName, 'error');
+                delete this._sendingQueue[targetId];
+                this._refreshUI();
+                return;
+            }
+
+            donors.sort(() => Math.random() - 0.5);
+
+            let sent = false;
+            const totalSent = { wood: 0, stone: 0, iron: 0 };
+
+            for (const donorId of donors) {
+                if (totalDeficit <= 0) break;
+
+                const donorRes = this._getResources(donorId);
+                if (!donorRes) continue;
+
+                // Recalcula déficit
+                const currentTotal = this._getTotalResources(targetId);
+                deficit.wood = Math.max(0, this.CONFIG.cost.wood - currentTotal.wood);
+                deficit.stone = Math.max(0, this.CONFIG.cost.stone - currentTotal.stone);
+                deficit.iron = Math.max(0, this.CONFIG.cost.iron - currentTotal.iron);
+                totalDeficit = deficit.wood + deficit.stone + deficit.iron;
+                if (totalDeficit <= 0) break;
+
+                // ⬇️⬇️⬇️ MUDANÇA PRINCIPAL: Envia 500 fixos de cada recurso ⬇️⬇️⬇️
+                const sendAmount = {
+                    wood: Math.min(this.CONFIG.donorFixedAmount, deficit.wood, donorRes.wood),
+                    stone: Math.min(this.CONFIG.donorFixedAmount, deficit.stone, donorRes.stone),
+                    iron: Math.min(this.CONFIG.donorFixedAmount, deficit.iron, donorRes.iron),
+                };
+                // ⬆️⬆️⬆️ FIM DA MUDANÇA ⬆️⬆️⬆️
+
+                const totalSend = sendAmount.wood + sendAmount.stone + sendAmount.iron;
+                if (totalSend < this.CONFIG.minSendTotal) continue;
+
+                const ok = await this._sendResources(donorId, targetId, sendAmount);
+                if (ok) {
+                    const pending = this._loadPending();
+                    if (!pending[targetId]) {
+                        pending[targetId] = { wood: 0, stone: 0, iron: 0, timestamp: Date.now() };
+                    }
+                    pending[targetId].wood += sendAmount.wood;
+                    pending[targetId].stone += sendAmount.stone;
+                    pending[targetId].iron += sendAmount.iron;
+                    pending[targetId].timestamp = Date.now();
+                    this._savePending(pending);
+
+                    totalSent.wood += sendAmount.wood;
+                    totalSent.stone += sendAmount.stone;
+                    totalSent.iron += sendAmount.iron;
+
+                    this._log(`✓ ${this.getTownName(donorId)} → ${targetName} | 🪵${sendAmount.wood} 🪨${sendAmount.stone} ⚙${sendAmount.iron}`, 'ok');
+                    sent = true;
+
+                    await this._randomDelay(800, 400);
+                } else {
+                    this._log('✗ Falha ao enviar de ' + this.getTownName(donorId), 'error');
+                }
+            }
+
+            // Verifica resultado final
+            const finalTotal = this._getTotalResources(targetId);
+            if (finalTotal && finalTotal.wood >= this.CONFIG.cost.wood &&
+                finalTotal.stone >= this.CONFIG.cost.stone &&
+                finalTotal.iron >= this.CONFIG.cost.iron) {
+                this._log('🎯 ' + targetName + ' tem recursos suficientes! A aguardar chegada.', 'ok');
+            } else if (sent) {
+                this._log(`📦 Enviados para ${targetName}: 🪵${totalSent.wood} 🪨${totalSent.stone} ⚙${totalSent.iron}`);
+            }
+
+            delete this._sendingQueue[targetId];
+            this._refreshUI();
+
+        } catch (e) {
+            this._log('Erro no ciclo: ' + (e?.message ?? e), 'error');
+            for (const tid in this._sendingQueue) delete this._sendingQueue[tid];
+        }
+    }
+
+    _randomDelay(base, variation) {
+        const ms = base + (Math.random() * variation * 2 - variation);
+        return new Promise(r => setTimeout(r, Math.max(50, ms)));
+    }
+};
