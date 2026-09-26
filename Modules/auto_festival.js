@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════════════════
-// MODULE: AutoFestival v1.3.0 (Prioridade Única + Anti-Falha)
+// MODULE: AutoFestival v1.4.0 (Foco Único + 500 Fixos por Envio)
 // ═══════════════════════════════════════════════════════
 
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.3.0';
+    VERSION = '1.4.0';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
@@ -11,8 +11,8 @@ var AutoFestival = class extends MultUtil {
         intervalMs: 30000,
         pendingTimeoutMs: 120000,
         donorMinResource: 100,      // Mínimo absoluto para considerar como doador
-        donorFixedAmount: 500,      // Envia até 500 fixos de cada recurso por viagem
-        minSendTotal: 100,          // Mínimo total de recursos por envio para valer a pena
+        donorFixedAmount: 500,      // ENVIA EXATAMENTE ATÉ 500 de cada recurso por viagem
+        minSendTotal: 150,          // Mínimo total de recursos por envio (evita viagens de 10/10/10)
         logLimit: 80,
         academyMinLevel: 30,
     });
@@ -95,15 +95,15 @@ var AutoFestival = class extends MultUtil {
             '<div class="mbhudf-root">' +
                 '<div class="mbhudf-header">' +
                     '<h2>◆ FESTIVAL ENGINE ◆</h2>' +
-                    '<div class="sub">PRIORIDADE ÚNICA · <span class="live" id="ff-live-sync">--:--:--</span></div>' +
+                    '<div class="sub">500 FIXOS POR VIAGEM · <span class="live" id="ff-live-sync">--:--:--</span></div>' +
                 '</div>' +
                 '<div class="mbhudf-section">' +
-                    '<span class="mbhudf-label">Protocolo de Prioridade</span>' +
+                    '<span class="mbhudf-label">Protocolo de Prioridade Única</span>' +
                     '<div class="mbhudf-desc">' +
-                        '1. Seleciona a <b>1ª cidade</b> sem festival e sem recursos.<br>' +
-                        '2. <b>Todas as doadoras</b> enviam até <b>500 fixos</b> de cada recurso para essa cidade.<br>' +
+                        '1. Foca na <b>1ª cidade</b> da fila sem festival e sem recursos.<br>' +
+                        '2. <b>Todas as doadoras</b> enviam remessas de <b>até 500 fixos</b> de cada recurso.<br>' +
                         '3. Só avança para a 2ª cidade quando a 1ª atingir <b>🪵15k · 🪨18k · ⚙15k</b>.<br>' +
-                        '4. Filtra automaticamente cidades sem capacidade de comércio para evitar falhas.' +
+                        '4. Limpeza automática de pendências ao atingir a meta.' +
                     '</div>' +
                 '</div>' +
                 '<div class="mbhudf-section">' +
@@ -129,7 +129,7 @@ var AutoFestival = class extends MultUtil {
         if (this._active) return;
         this._active = true;
         this.storage.save(this.STORAGE_KEY_ACTIVE, true);
-        this._log('🎉 Iniciado. Modo de prioridade única ativado.', 'ok');
+        this._log('🎉 Iniciado. Modo de prioridade única (500 fixos) ativado.', 'ok');
         this._refreshUI();
         this._main();
         this._intervalId = setInterval(() => {
@@ -198,10 +198,9 @@ var AutoFestival = class extends MultUtil {
         return towns.map(t => {
             const tid = t.id;
             const hasActive = this._hasActiveFestival(tid);
-            const totalRes = this._getTotalResources(tid);
             const currentRes = this._getResources(tid);
             const pending = pendingAll[tid];
-            const hasResources = totalRes && totalRes.wood >= this.CONFIG.cost.wood && totalRes.stone >= this.CONFIG.cost.stone && totalRes.iron >= this.CONFIG.cost.iron;
+            const hasResources = this._hasEnoughResources(tid);
             let statusKey = hasActive ? 'active' : (hasResources ? 'ready' : 'waiting');
             let statusText = hasActive ? '🎉 Ativo' : (hasResources ? '✅ Pronto' : '⏳ Precisa');
             const resText = currentRes ? `🪵${Math.floor(currentRes.wood)} 🪨${Math.floor(currentRes.stone)} ⚙${Math.floor(currentRes.iron)}` : '—';
@@ -263,9 +262,7 @@ var AutoFestival = class extends MultUtil {
     }
 
     _checkAndClearPending(tid) {
-        const current = this._getResources(tid);
-        if (!current) return false;
-        if (current.wood >= this.CONFIG.cost.wood && current.stone >= this.CONFIG.cost.stone && current.iron >= this.CONFIG.cost.iron) {
+        if (this._hasEnoughResources(tid)) {
             const pending = this._loadPending();
             if (pending[tid]) {
                 this._log('✓ ' + this.getTownName(tid) + ' recebeu tudo. Pendências limpas.', 'ok');
@@ -291,22 +288,11 @@ var AutoFestival = class extends MultUtil {
         if (dirty) this._savePending(pending);
     }
 
-    _anyCityNeedsResources() {
-        const all = this._getAllTowns();
-        for (const t of all) {
-            if (!this._canDoFestival(t.id)) continue;
-            if (this._hasActiveFestival(t.id)) continue;
-            if (this._hasEnoughResources(t.id)) continue;
-            return true; // Encontrou pelo menos uma que precisa
-        }
-        return false;
-    }
-
     _scanTowns() {
         this._cleanPending();
         const all = this._getAllTowns();
         const eligible = all.filter(t => this._canDoFestival(t.id));
-        // ORDENAÇÃO CRÍTICA: Prioriza as que NÃO têm festival e NÃO têm recursos
+        // ORDENAÇÃO CRÍTICA: Prioriza as que NÃO têm festival e NÃO têm recursos (0 = prioridade máxima)
         eligible.sort((a, b) => {
             const aScore = this._hasActiveFestival(a.id) ? 2 : (this._hasEnoughResources(a.id) ? 1 : 0);
             const bScore = this._hasActiveFestival(b.id) ? 2 : (this._hasEnoughResources(b.id) ? 1 : 0);
@@ -320,17 +306,32 @@ var AutoFestival = class extends MultUtil {
         const towns = this._scanTowns();
         const pending = this._loadPending();
         let dirty = false;
+
         for (const t of towns) {
             const tid = t.id;
-            if (this._hasActiveFestival(tid)) { if (pending[tid]) { delete pending[tid]; dirty = true; } continue; }
-            if (this._checkAndClearPending(tid)) continue;
-            if (this._hasEnoughResources(tid)) continue; // Se já tem, pula para a próxima
+
+            // 1. Se já tem festival, ignora e limpa pendências
+            if (this._hasActiveFestival(tid)) {
+                if (pending[tid]) { delete pending[tid]; dirty = true; }
+                continue;
+            }
+
+            // 2. Se já tem recursos suficientes, ignora, limpa pendências e deixa o loop passar para a PRÓXIMA
+            if (this._hasEnoughResources(tid)) {
+                if (pending[tid]) { delete pending[tid]; dirty = true; }
+                continue;
+            }
+
+            // 3. Se está sendo processada agora, ignora para não duplicar comandos
             if (this._sendingQueue[tid]) continue;
+
+            // 4. Encontrou a PRIMEIRA cidade que precisa. Retorna ela (1 de cada vez).
             if (dirty) this._savePending(pending);
-            return tid; // RETORNA A PRIMEIRA QUE PRECISA (PRIORIDADE MÁXIMA)
+            return tid;
         }
+
         if (dirty) this._savePending(pending);
-        return null;
+        return null; // Nenhuma cidade precisa
     }
 
     _getDonorTowns(targetId) {
@@ -345,7 +346,7 @@ var AutoFestival = class extends MultUtil {
             const res = this._getResources(tid);
             if (!res) continue;
 
-            // FILTRO ANTI-FALHA: Só considera se tiver pelo menos 100 de algum recurso
+            // FILTRO: Só considera se tiver pelo menos 100 de algum recurso
             if (res.wood < this.CONFIG.donorMinResource && res.stone < this.CONFIG.donorMinResource && res.iron < this.CONFIG.donorMinResource) continue;
 
             // FILTRO DE CAPACIDADE: Evita falhas por comerciantes ocupados
@@ -388,45 +389,36 @@ var AutoFestival = class extends MultUtil {
         if (uw.$('.botcheck').length || uw.$('#recaptcha_window').length) return;
 
         try {
+            // Limpeza geral de pendências resolvidas
             const allTowns = this._getAllTowns();
             for (const t of allTowns) this._checkAndClearPending(t.id);
 
-            if (!this._anyCityNeedsResources()) {
-                this._log('✅ Todas as cidades elegíveis têm festival ativo ou recursos suficientes. Auto-parado.', 'ok');
+            // Obtém a PRIMEIRA cidade que precisa (garante 1 de cada vez)
+            const targetId = this._getTargetTown();
+            if (!targetId) {
+                this._log('✅ Todas as cidades elegíveis estão abastecidas ou com festival ativo.', 'ok');
                 this._refreshUI();
                 this.stop();
                 return;
             }
 
-            const targetId = this._getTargetTown();
-            if (!targetId) {
-                this._log('Aguardando cidades ficarem elegíveis...', 'info');
-                this._refreshUI();
-                return;
-            }
-
             const targetName = this.getTownName(targetId);
-            this._log(`🎯 FOCO: ${targetName}. A concentrar recursos até atingir a meta...`, 'info');
+            
+            // Trava a cidade na fila de processamento
+            this._sendingQueue[targetId] = true;
 
-            const totalRes = this._getTotalResources(targetId);
-            const deficit = {
-                wood: Math.max(0, this.CONFIG.cost.wood - totalRes.wood),
-                stone: Math.max(0, this.CONFIG.cost.stone - totalRes.stone),
-                iron: Math.max(0, this.CONFIG.cost.iron - totalRes.iron),
-            };
-            let totalDeficit = deficit.wood + deficit.stone + deficit.iron;
-
-            if (totalDeficit <= 0) {
-                this._log(`🎯 ${targetName} já atingiu a meta!`, 'ok');
-                const pending = this._loadPending();
-                if (pending[targetId]) { delete pending[targetId]; this._savePending(pending); }
+            // Verificação de segurança: se por algum motivo ela já estiver completa, libera e sai
+            if (this._hasEnoughResources(targetId)) {
+                this._log(`🎯 ${targetName} já está completa. Passando para a próxima...`, 'ok');
+                this._checkAndClearPending(targetId);
+                delete this._sendingQueue[targetId];
                 this._refreshUI();
                 return;
             }
 
-            this._sendingQueue[targetId] = true;
+            this._log(`🎯 FOCO ATUAL: ${targetName}. Enviando remessas de até 500 de cada recurso...`, 'info');
+
             const donors = this._getDonorTowns(targetId);
-            
             if (!donors.length) {
                 this._log(`⚠ Sem doadores válidos para ${targetName} (verifica comerciantes/recursos).`, 'warn');
                 delete this._sendingQueue[targetId];
@@ -441,27 +433,34 @@ var AutoFestival = class extends MultUtil {
             const totalSent = { wood: 0, stone: 0, iron: 0 };
 
             for (const donorId of donors) {
-                if (totalDeficit <= 0) break;
+                // Recalcula déficit em tempo real a cada doador
+                const currentTotal = this._getTotalResources(targetId);
+                const currentDeficit = {
+                    wood: Math.max(0, this.CONFIG.cost.wood - currentTotal.wood),
+                    stone: Math.max(0, this.CONFIG.cost.stone - currentTotal.stone),
+                    iron: Math.max(0, this.CONFIG.cost.iron - currentTotal.iron),
+                };
+                const totalDeficit = currentDeficit.wood + currentDeficit.stone + currentDeficit.iron;
+
+                // SE A META JÁ FOI ATINGIDA, PARA IMEDIATAMENTE E DEIXA A PRÓXIMA CIDADE PARA O PRÓXIMO CICLO
+                if (totalDeficit <= 0) {
+                    this._log(`🎯 Meta atingida em ${targetName}! Próxima cidade na fila.`, 'ok');
+                    break;
+                }
 
                 const donorRes = this._getResources(donorId);
                 if (!donorRes) continue;
 
-                // Recalcula déficit em tempo real
-                const currentTotal = this._getTotalResources(targetId);
-                deficit.wood = Math.max(0, this.CONFIG.cost.wood - currentTotal.wood);
-                deficit.stone = Math.max(0, this.CONFIG.cost.stone - currentTotal.stone);
-                deficit.iron = Math.max(0, this.CONFIG.cost.iron - currentTotal.iron);
-                totalDeficit = deficit.wood + deficit.stone + deficit.iron;
-                if (totalDeficit <= 0) break;
-
-                // LÓGICA DE 500 FIXOS: Envia até 500, mas nunca mais do que o déficit ou o que o doador tem
+                // LÓGICA DE 500 FIXOS: Tenta enviar 500 de cada, mas respeita o que falta e o que o doador tem
                 const sendAmount = {
-                    wood: Math.min(this.CONFIG.donorFixedAmount, deficit.wood, donorRes.wood),
-                    stone: Math.min(this.CONFIG.donorFixedAmount, deficit.stone, donorRes.stone),
-                    iron: Math.min(this.CONFIG.donorFixedAmount, deficit.iron, donorRes.iron),
+                    wood: Math.min(this.CONFIG.donorFixedAmount, currentDeficit.wood, donorRes.wood),
+                    stone: Math.min(this.CONFIG.donorFixedAmount, currentDeficit.stone, donorRes.stone),
+                    iron: Math.min(this.CONFIG.donorFixedAmount, currentDeficit.iron, donorRes.iron),
                 };
 
                 const totalSend = sendAmount.wood + sendAmount.stone + sendAmount.iron;
+                
+                // Se o envio for muito pequeno, não vale a pena gastar comerciantes (pula para o próximo doador)
                 if (totalSend < this.CONFIG.minSendTotal) continue;
 
                 const ok = await this._sendResources(donorId, targetId, sendAmount);
@@ -481,24 +480,17 @@ var AutoFestival = class extends MultUtil {
                     this._log(`✓ ${this.getTownName(donorId)} → ${targetName} | 🪵${sendAmount.wood} 🪨${sendAmount.stone} ⚙${sendAmount.iron}`, 'ok');
                     sent = true;
                     await this._randomDelay(800, 400);
-                } else {
-                    // Falha silenciosa para não encher o log, já que filtramos os óbvios
-                    // this._log('✗ Falha ao enviar de ' + this.getTownName(donorId), 'error');
                 }
             }
 
-            const finalTotal = this._getTotalResources(targetId);
-            if (finalTotal && finalTotal.wood >= this.CONFIG.cost.wood && finalTotal.stone >= this.CONFIG.cost.stone && finalTotal.iron >= this.CONFIG.cost.iron) {
-                this._log(`🎉 META ATINGIDA em ${targetName}! A preparar festival...`, 'ok');
-            } else if (sent) {
-                this._log(`📦 Enviados para ${targetName}: 🪵${totalSent.wood} 🪨${totalSent.stone} ⚙${totalSent.iron}`, 'info');
-            }
-
+            // Limpeza final e liberação da fila
+            this._checkAndClearPending(targetId);
             delete this._sendingQueue[targetId];
             this._refreshUI();
 
         } catch (e) {
             this._log('Erro no ciclo: ' + (e?.message ?? e), 'error');
+            // Libera a fila em caso de erro para não travar o script
             for (const tid in this._sendingQueue) delete this._sendingQueue[tid];
         }
     }
