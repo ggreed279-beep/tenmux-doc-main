@@ -1,7 +1,13 @@
 // ══════════════════════════════════════════════════════
-//  MODULE: AutoDodge v2.0
+//  MODULE: AutoDodge v2.0.1
 //  Engine portada do "Grepolis Dodge Silencioso" (Kelsiito)
 //  integrada ao MultBot (settings, toggle, console).
+//
+//  v2.0.1 — Boot agora fiel ao original 1.3.5:
+//   • waitForBindings (poll 250ms, até 30s) ANTES de tudo
+//   • restoreJobs() só depois das bindings prontas
+//     (corrige jobs que ficavam 'blocked' após reload)
+//   • Logs da consola com detalhes JSON como o original
 //
 //  O que faz:
 //   • Detecta ataques entrantes via MovementsUnits (scan 1s + heartbeat 50ms)
@@ -17,7 +23,7 @@
 //   • Lock entre abas: só uma aba controla
 // ══════════════════════════════════════════════════════
 var AutoDodge = class extends MultUtil {
-    VERSION = '2.0.0';
+    VERSION = '2.0.1';
 
     CONFIG = Object.freeze({
         enabled: true,
@@ -59,6 +65,9 @@ var AutoDodge = class extends MultUtil {
 
     // ── MultBot state ──
     _active = false;
+    _starting = false;    // boot em curso (a aguardar bindings)
+    _wantActive = false;  // intenção do utilizador (sobrevive ao boot assíncrono)
+    _restored = false;    // restoreJobs só corre uma vez, após bindings prontas
     _scanTimer = null;
     _heartbeatTimer = null;
     _lastStatusUpdate = 0;
@@ -79,8 +88,9 @@ var AutoDodge = class extends MultUtil {
     constructor(c, s) {
         super(c, s);
         this._ownerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
-        this._restoreJobs();
-
+        // NOTA: restoreJobs() NÃO corre aqui — no original só corre no boot,
+        // depois das bindings estarem prontas. Correr aqui marcava os jobs
+        // agendados como 'blocked' porque uw.MM ainda não existia.
         if (this.storage.load('dodge_active', false)) {
             setTimeout(() => this.start(), 2000);
         }
@@ -114,16 +124,34 @@ var AutoDodge = class extends MultUtil {
     };
 
     toggle = () => {
-        if (this._active) this.stop();
+        if (this._active || this._starting) this.stop();
         else this.start();
     };
 
     start() {
-        if (this._active) return;
-        if (!this._bindingsReady()) {
-            this.console.log(`${this.PREFIX} Grepolis internals ainda não prontos — reagendando.`);
-            setTimeout(() => { if (!this._active) this.start(); }, 500);
+        if (this._active || this._starting) return;
+        this._wantActive = true;
+        this._starting = true;
+        this._boot().catch((e) => {
+            this._starting = false;
+            this._log('error', `boot: ${e?.message ?? e}`);
+        });
+    }
+
+    // Boot fiel ao original 1.3.5: waitForBindings → restoreJobs → start
+    async _boot() {
+        const ready = await this._waitForBindings(30_000);
+        this._starting = false;
+        if (!this._wantActive) return; // utilizador parou durante o arranque
+        if (!ready) {
+            this._wantActive = false;
+            this.storage.save('dodge_active', false);
+            this._log('error', 'APIs internas do Grepolis não ficaram disponíveis; módulo parado.');
             return;
+        }
+        if (!this._restored) {
+            this._restored = true;
+            this._restoreJobs();
         }
         this._active = true;
         this.storage.save('dodge_active', true);
@@ -146,7 +174,22 @@ var AutoDodge = class extends MultUtil {
         this._scan().catch(() => {});
     }
 
+    // Poll silencioso a cada 250ms, até 30s — como o waitForBindings original
+    _waitForBindings(timeoutMs = 30_000) {
+        return new Promise((resolve) => {
+            const deadline = Date.now() + timeoutMs;
+            const check = () => {
+                if (this._bindingsReady()) return resolve(true);
+                if (!this._wantActive || Date.now() >= deadline) return resolve(false);
+                setTimeout(check, 250);
+            };
+            check();
+        });
+    }
+
     stop() {
+        this._wantActive = false;
+        this._starting = false;
         this._active = false;
         this.storage.save('dodge_active', false);
         clearInterval(this._scanTimer);
@@ -193,7 +236,11 @@ var AutoDodge = class extends MultUtil {
 
     _log(level, message, details = {}) {
         const icon = level === 'error' ? '✗' : level === 'warn' ? '⚠' : '·';
-        this.console.log(`${this.PREFIX} ${icon} ${message}`);
+        let diagnostic = '';
+        try {
+            diagnostic = Object.keys(details).length ? ` ${JSON.stringify(details)}` : '';
+        } catch (e) { diagnostic = ' {"error":"details-unserializable"}'; }
+        this.console.log(`${this.PREFIX} ${icon} ${message}${diagnostic}`);
 
         try {
             const $log = uw.$('#dodge_log');
