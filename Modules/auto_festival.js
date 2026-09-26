@@ -1,9 +1,9 @@
-
 // ══════════════════════════════════════════════════════
-//  MODULE: AutoFestival v1.2.0 (Cyberpunk Edition - Fixed)
+//  MODULE: AutoFestival v1.3.0 (Cyberpunk Pro Edition)
+//  Lógica de Envio: Lotes de 500 Recursos Fixos
 // ══════════════════════════════════════════════════════
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.2.0';
+    VERSION = '1.3.0';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
@@ -11,7 +11,7 @@ var AutoFestival = class extends MultUtil {
         intervalMs: 30000,
         pendingTimeoutMs: 120000,
         donorMinResource: 500,
-        fixedSendAmount: 500, // O valor que tu queres!
+        fixedSendAmount: 500, // VALOR DEFINIDO: 500 de cada
         minSendTotal: 100,
         logLimit: 80,
         academyMinLevel: 30,
@@ -81,7 +81,7 @@ var AutoFestival = class extends MultUtil {
         this.storage.save(this.STORAGE_KEY_ACTIVE, true);
         this._log('🎉 Iniciado.', 'ok');
         this._main();
-        this._intervalId = setInterval(() => this._main(), this.CONFIG.intervalMs);
+        this._intervalId = setInterval(() => { this._main().catch(e => this._log(`Erro: ${e}`, 'error')); }, this.CONFIG.intervalMs);
     }
 
     stop() {
@@ -112,19 +112,17 @@ var AutoFestival = class extends MultUtil {
     _buildTownListHtml() {
         const towns = this._scanTowns();
         if (!towns.length) return '<div style="font-size:10px;">Nenhuma cidade.</div>';
-        return towns.map(t => `<div class="mbhudf-town"><span>${t.name}</span><span class="mbhudf-pill ready">Monitor</span></div>`).join('');
+        return towns.map(t => `<div class="mbhudf-town"><span class="name">${t.name}</span><span class="mbhudf-pill ready">Monitor</span></div>`).join('');
     }
 
     _buildLogHtml() {
         const logs = this.storage.load(this.STORAGE_KEY_LOGS, []);
         return logs.map(e => {
             const d = new Date(e.at);
-            const ts = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+            const ts = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`;
             return `<div class="ln ${e.level}"><span class="ts">${ts}</span><span>${e.message}</span></div>`;
         }).join('');
     }
-
-    // --- LOGICA DE ENVIO CORRIGIDA ---
 
     async _main() {
         if (!this._active) return;
@@ -155,7 +153,7 @@ var AutoFestival = class extends MultUtil {
 
                 const donorRes = this._getResources(donorId);
                 
-                // AQUI ESTÁ O SEU 500 FIXO!
+                // LÓGICA DOS 500 RECURSOS
                 const sendAmount = {
                     wood: Math.min(Math.floor(donorRes.wood), deficit.wood, this.CONFIG.fixedSendAmount),
                     stone: Math.min(Math.floor(donorRes.stone), deficit.stone, this.CONFIG.fixedSendAmount),
@@ -167,14 +165,15 @@ var AutoFestival = class extends MultUtil {
                 const ok = await this._sendResources(donorId, targetId, sendAmount);
                 if (ok) {
                     this._log(`✓ ${this.getTownName(donorId)} → ${targetName} | 🪵${sendAmount.wood} 🪨${sendAmount.stone} ⚙${sendAmount.iron}`, 'ok');
-                    await new Promise(r => setTimeout(r, 1000));
+                    await new Promise(r => setTimeout(r, 1500));
                 } else {
                     this._log('✗ Falha ao enviar de ' + this.getTownName(donorId), 'error');
                 }
             }
         } catch (e) {
-            this._log('Erro: ' + e, 'error');
+            this._log('Erro no ciclo: ' + e, 'error');
         }
+        this._refreshUI();
     }
 
     _getTargetTown() {
@@ -232,6 +231,3 @@ var AutoFestival = class extends MultUtil {
             return false;
         } catch (e) { return false; }
     }
-
-    _loadPending() { return this.storage.load(this.STORAGE_KEY_PENDING, {}); }
-    _savePending(p) { this.storage.save
