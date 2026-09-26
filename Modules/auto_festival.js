@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════════════════
-// MODULE: AutoFestival v1.4.1 (Correção Crítica de Doadores)
+// MODULE: AutoFestival v1.4.2 (Correção Crítica: Bloqueio de Doação por Recetores)
 // ═══════════════════════════════════════════════════════
 
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.4.1';
+    VERSION = '1.4.2';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
@@ -101,9 +101,10 @@ var AutoFestival = class extends MultUtil {
                     '<span class="mbhudf-label">Protocolo de Prioridade Única</span>' +
                     '<div class="mbhudf-desc">' +
                         '1. Foca na <b>1ª cidade</b> da fila sem festival e sem recursos.<br>' +
-                        '2. <b>Todas as doadoras</b> (mesmo as que aguardam) enviam remessas de <b>até 500 fixos</b>.<br>' +
-                        '3. Só avança para a 2ª cidade quando a 1ª atingir <b>🪵15k · 🪨18k · ⚙15k</b>.<br>' +
-                        '4. Limpeza automática de pendências ao atingir a meta.' +
+                        '2. <b>Todas as doadoras</b> enviam remessas de <b>até 500 fixos</b>.<br>' +
+                        '3. <b>PROTEÇÃO ANTI-LOOP:</b> Cidades que recebem recursos estão <b>BLOQUEADAS</b> para doar.<br>' +
+                        '4. Só avança para a 2ª cidade quando a 1ª atingir <b>🪵15k · 🪨18k · ⚙15k</b>.<br>' +
+                        '5. Limpeza automática de pendências ao atingir a meta.' +
                     '</div>' +
                 '</div>' +
                 '<div class="mbhudf-section">' +
@@ -129,7 +130,7 @@ var AutoFestival = class extends MultUtil {
         if (this._active) return;
         this._active = true;
         this.storage.save(this.STORAGE_KEY_ACTIVE, true);
-        this._log('🎉 Iniciado. Modo de prioridade única (500 fixos) ativado.', 'ok');
+        this._log('🎉 Iniciado. Modo de prioridade única (500 fixos + anti-loop) ativado.', 'ok');
         this._refreshUI();
         this._main();
         this._intervalId = setInterval(() => {
@@ -328,15 +329,25 @@ var AutoFestival = class extends MultUtil {
     _getDonorTowns(targetId) {
         const all = this._getAllTowns();
         const donors = [];
+        const pending = this._loadPending();
+
         for (const t of all) {
             const tid = t.id;
+            
+            // 1. Não pode doar para si mesma
             if (tid === targetId) continue;
             
-            // Preserva cidades que já concluíram o festival (opcional: remova esta linha se quiser que elas também doem)
+            // 2. Não doar se já tem festival ativo
             if (this._hasActiveFestival(tid)) continue;
 
-            // ✅ CORREÇÃO CRÍTICA: Removido o bloqueio que impedia cidades "Aguardar" de doar.
-            // Agora, cidades que também precisam podem doar seus excedentes para a cidade alvo prioritária.
+            // 3. 🚫 BLOQUEIO CRÍTICO: Não doar se esta cidade está atualmente na fila de envio (é um alvo ativo)
+            if (this._sendingQueue[tid]) continue;
+
+            // 4. 🚫 BLOQUEIO CRÍTICO: Não doar se esta cidade já tem recursos pendentes a chegar (já é uma recetora)
+            if (pending[tid]) continue;
+
+            // 5. Não doar se já tem recursos suficientes (deveria estar a fazer o seu próprio festival)
+            if (this._hasEnoughResources(tid)) continue;
 
             const res = this._getResources(tid);
             if (!res) continue;
