@@ -27,12 +27,23 @@ var AutoFarm = class extends MultUtil {
     BATCH_SIZE    = 25;             // cidades por pedido (modo Capitão)
     LOTE_PAUSA_MS = 1200;           // pausa entre lotes (modo Capitão)
     ALDEIA_PAUSA_MS = 500;          // pausa entre aldeias (modo individual)
-    MAX_ALDEIAS   = 60;             // limite por ciclo (modo individual)
+    MAX_ALDEIAS   = 60;             // limite por ciclo (modos individual/humano)
     JITTER_MS     = 8000;           // variação aleatória (5–13s) por ciclo
+
+    /* OPÇÃO 3 — Loop humano: tempos sempre diferentes */
+    HUMANO_MIN_MS          = 9.5 * 60 * 1000; // intervalo mínimo entre ciclos
+    HUMANO_MAX_MS          = 14   * 60 * 1000; // intervalo máximo entre ciclos
+    HUMANO_CLAIM_MIN_MS    = 1200;  // pausa mínima entre aldeias
+    HUMANO_CLAIM_MAX_MS    = 4500;  // pausa máxima entre aldeias
+    HUMANO_DISTRACAO_CHANCE = 0.08; // 8% de chance de "distração"
+    HUMANO_DISTRACAO_MIN_MS = 6000; // duração mínima da distração
+    HUMANO_DISTRACAO_MAX_MS = 15000;// duração máxima da distração
+    HUMANO_SKIP_CHANCE     = 0.05;  // 5% de chance de adiar 1 aldeia
 
     METODOS = [
         { id: 'capitao',    label: '🧭 OPÇÃO 1 — Capitão (lote)' },
         { id: 'individual', label: '👟 OPÇÃO 2 — Cidade a cidade' },
+        { id: 'humano',     label: '🧑 OPÇÃO 3 — Loop humano (variado)' },
     ];
 
     constructor(c, s) {
@@ -79,6 +90,15 @@ var AutoFarm = class extends MultUtil {
             this.createButton('mult_farm_metodo_' + m.id, m.label, this.escolherMetodo)
         );
         this.$content.append(...this.$botoesMetodo);
+
+        // ── Ligar / Desligar (botões explícitos) ──
+        this.$content.append(
+            uw.$("<p></p>").text('Estado do módulo:')
+                .css({ "text-align": "left", "margin": "8px 2px 2px", "font-weight": "bold" })
+        );
+        this.$botaoLigar = this.createButton('mult_farm_ligar', '🟢 LIGAR', this.botaoLigar);
+        this.$botaoDesligar = this.createButton('mult_farm_desligar', '🔴 DESLIGAR', this.botaoDesligar);
+        this.$content.append(this.$botaoLigar, this.$botaoDesligar);
 
         // ── Ação imediata ──
         this.$content.append(
@@ -130,10 +150,29 @@ var AutoFarm = class extends MultUtil {
         this.console.log('[AutoFarm] Método: ' + m.label + '.');
     };
 
+    /* Botões explícitos de LIGAR / DESLIGAR (podem trocar de método a
+       qualquer momento, com o módulo ligado ou desligado) */
+    botaoLigar = () => {
+        if (this.ativo) return;
+        this.ligar();
+    };
+
+    botaoDesligar = () => {
+        if (!this.ativo) return;
+        this.desligar();
+    };
+
     atualizarBotoes = () => {
+        // Método: a opção ativa fica destacada
         for (const b of this.$botoesMetodo) b.addClass('disabled');
         const i = this.METODOS.findIndex(m => m.id === this.metodo);
         if (i >= 0) this.$botoesMetodo[i].removeClass('disabled');
+
+        // Ligar/Desligar: o botão do estado ATUAL fica destacado
+        this.$botaoLigar.addClass('disabled');
+        this.$botaoDesligar.addClass('disabled');
+        if (this.ativo) this.$botaoDesligar.removeClass('disabled');
+        else this.$botaoLigar.removeClass('disabled');
 
         if (!this.ativo) {
             this.$count.css('color', 'red');
@@ -183,8 +222,10 @@ var AutoFarm = class extends MultUtil {
         this.ativo = true;
         this.storage.save('af_active', true);
         this._janelaAberta = false;
-        // Primeira recolha ~10s depois de ligar, depois a cada 10 min
-        this._proximaRecolha = Date.now() + 10000 + Math.random() * 5000;
+        // Primeira recolha: ~10–15s (opções 1/2) ou 20–90s (opção humano)
+        this._proximaRecolha = Date.now() + (this.metodo === 'humano'
+            ? 20000 + Math.random() * 70000
+            : 10000 + Math.random() * 5000);
         this.atualizarBotoes();
         this.console.log('[AutoFarm] Ligado — recolha a cada 10 minutos (' +
             (this.METODOS.find(m => m.id === this.metodo) || this.METODOS[0]).label + ').');
@@ -238,6 +279,9 @@ var AutoFarm = class extends MultUtil {
             if (this.metodo === 'capitao') {
                 ok = await this._recolherCapitao(cidades);
                 if (!ok) this.console.log('[AutoFarm] Capitão indisponível/falhou — a usar cidade a cidade.');
+            } else if (this.metodo === 'humano') {
+                await this._recolherHumano(cidades);
+                ok = true;
             }
             if (!ok) {
                 await this._recolherIndividual(cidades);
@@ -246,9 +290,12 @@ var AutoFarm = class extends MultUtil {
             this.console.log('[AutoFarm] Erro na recolha: ' + (e && e.message ? e.message : e));
         } finally {
             this._emRecolha = false;
-            // Agenda a próxima: 10 min + jitter aleatório (5–13s)
-            this._proximaRecolha = Date.now() + this.INTERVALO_MS
-                + 5000 + Math.random() * this.JITTER_MS;
+            // Próxima recolha:
+            //  Opções 1/2 — 10 min + jitter 5–13s
+            //  Opção 3    — intervalo aleatório entre 9,5 e 14 min
+            this._proximaRecolha = Date.now() + (this.metodo === 'humano'
+                ? this.HUMANO_MIN_MS + Math.random() * (this.HUMANO_MAX_MS - this.HUMANO_MIN_MS)
+                : this.INTERVALO_MS + 5000 + Math.random() * this.JITTER_MS);
             this.stats.ultimaRecolhaAt = Date.now();
             this.storage.save('af_stats', this.stats);
         }
@@ -350,6 +397,91 @@ var AutoFarm = class extends MultUtil {
                 uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers();
             }, 2000);
         } catch (e) {}
+    };
+
+    /* OPÇÃO 3 — Loop humano: nenhum tempo é igual ao anterior.
+         • Intervalo entre ciclos: 9,5–14 min (aleatório)
+         • Pausa entre aldeias: 1,2–4,5s (aleatória)
+         • 8% de chance de "distração" (pausa de 6–15s)
+         • 5% de chance de adiar 1 aldeia para o próximo ciclo
+         • Ordem de cidades e aldeias embaralhada a cada ciclo
+         • Abre a janela de farm antes de começar (como um humano) */
+    _recolherHumano = async (cidades) => {
+        let contador = 0;
+        try {
+            // Humano abre primeiro a janela do farm
+            await this.fakeOpening();
+            await this.sleep(1500, 800);
+
+            const { models: relacoes } = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation');
+            const { models: aldeias } = uw.MM.getOnlyCollectionByName('FarmTown');
+            const agora = Math.floor(Date.now() / 1000);
+
+            // Mapa aldeia_rural_id -> 'x:y' (ilha)
+            const ilhaDaAldeia = new Map();
+            for (const f of aldeias) {
+                ilhaDaAldeia.set(String(f.attributes.id), f.attributes.island_x + ':' + f.attributes.island_y);
+            }
+
+            // Embaralha a ordem das cidades (diferente a cada ciclo)
+            const fila = [...cidades];
+            for (let i = fila.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [fila[i], fila[j]] = [fila[j], fila[i]];
+            }
+
+            for (const c of fila) {
+                const town = uw.ITowns.towns[c.id];
+                if (!town) continue;
+                const chaveIlha = town.getIslandCoordinateX() + ':' + town.getIslandCoordinateY();
+
+                // Aldeias prontas desta ilha, também embaralhadas
+                const prontas = [];
+                for (const rel of relacoes) {
+                    const a = rel.attributes;
+                    if (ilhaDaAldeia.get(String(a.farm_town_id)) !== chaveIlha) continue;
+                    if (a.relation_status !== 1) continue;
+                    if (a.lootable_at !== null && a.lootable_at !== undefined && agora < a.lootable_at) continue;
+                    prontas.push(rel);
+                }
+                for (let i = prontas.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [prontas[i], prontas[j]] = [prontas[j], prontas[i]];
+                }
+
+                for (const rel of prontas) {
+                    // 5%: deixa esta aldeia para o próximo ciclo
+                    if (Math.random() < this.HUMANO_SKIP_CHANCE) continue;
+
+                    await this.claimSingle(parseInt(c.id, 10), rel.attributes.farm_town_id, rel.id, 1);
+                    contador++;
+
+                    // Pausa humana entre aldeias: 1,2–4,5s
+                    const media = (this.HUMANO_CLAIM_MIN_MS + this.HUMANO_CLAIM_MAX_MS) / 2;
+                    await this.sleep(media, media - this.HUMANO_CLAIM_MIN_MS);
+
+                    // 8%: "distração" — pausa mais longa (6–15s)
+                    if (Math.random() < this.HUMANO_DISTRACAO_CHANCE) {
+                        const mediaD = (this.HUMANO_DISTRACAO_MIN_MS + this.HUMANO_DISTRACAO_MAX_MS) / 2;
+                        await this.sleep(mediaD, mediaD - this.HUMANO_DISTRACAO_MIN_MS);
+                    }
+
+                    if (contador >= this.MAX_ALDEIAS) {
+                        this._aposRecolha();
+                        this.stats.recolhas += contador;
+                        this.console.log('[AutoFarm] 🧑 Limite de ' + this.MAX_ALDEIAS + ' aldeias neste ciclo.');
+                        return;
+                    }
+                }
+            }
+
+            this.stats.recolhas += contador;
+            if (contador > 0) this.console.log('[AutoFarm] 🧑 ' + contador + ' aldeia(s) recolhida(s) em modo humano.');
+            this._aposRecolha();
+        } catch (e) {
+            this.console.log('[AutoFarm] Erro no modo humano: ' + (e && e.message ? e.message : e));
+            this.stats.recolhas += contador;
+        }
     };
 
     /* ════════════ 7. DADOS ════════════ */
