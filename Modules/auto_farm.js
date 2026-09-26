@@ -1,14 +1,81 @@
+// ══════════════════════════════════════════════════════
+//  MODULE: AutoFarm Turbo v2 — REESCRITA TOTAL
+//
+//  Porquê a versão antiga era lenta:
+//   • Timer GLOBAL fixo (5/10/20 min) — colhia tudo de uma vez
+//     e depois esperava o intervalo inteiro, mesmo que as
+//     aldeias rurais ficassem prontas antes.
+//   • Esperava pelo "maior grupo" de lootable_at (modo estatístico)
+//     — cidades prontas ficavam paradas à espera das outras.
+//   • fakeOpening + fakeSelectAll em CADA ciclo (metade da lentidão).
+//
+//  Como a Turbo funciona:
+//   • COLETA POR CIDADE no momento exato: um ticker de 1s vigia o
+//     lootable_at de cada ilha e colhe a cidade assim que a SUA ilha
+//     está pronta — sem esperar timer global nem outras cidades.
+//   • Jitter determinístico por cidade (2–9s) para não disparar
+//     tudo no mesmo segundo (parece humano, espalha o servidor).
+//   • Janela de farm simulada UMA vez por sessão, não por ciclo.
+//   • Lotes maiores (25) com pausa curta (1.2s).
+//   • Escolhe automaticamente a cidade representante de cada ilha:
+//     a que tem MAIS ESPAÇO no armazém.
+//   • Filtro de armazém CORRIGIDO: a antiga só colhia quando o
+//     armazém estava CHEIO (desperdiçava tudo que transbordava).
+//     Agora colhe enquanto o armazém tem espaço (abaixo de X%).
+//   • Contagem regressiva até a PRÓXIMA cidade pronta (não um
+//     número genérico), botão "Coletar já" e estatísticas.
+//
+//  Endpoints e time_options confirmados por captura real de rede:
+//   farm_town_overviews/claim_loads_multiple — towns[], 
+//   time_option_base/booty válidos: 600, 2400, 10800, 28800.
+// ══════════════════════════════════════════════════════
 var AutoFarm = class extends MultUtil {
+    /* Modos = duração da coleta (define o cooldown a seguir).
+       Valores confirmados válidos pelo loads_data da resposta. */
+    MODES = [
+        { id: 'turbo',  label: '⚡ 10 min', base: 600,   booty: 2400  },
+        { id: 'rapido', label: '🕐 40 min', base: 2400,  booty: 2400  },
+        { id: 'longo',  label: '🌇 3 h',   base: 10800, booty: 10800 },
+        { id: 'noite',  label: '🌙 8 h',   base: 28800, booty: 28800 },
+    ];
+
+    /* Filtro de armazém: colhe apenas enquanto o recurso mais cheio
+       está ABAIXO dist (evita desperdício por transbordo). */
+    PERCENTS = [
+        { v: 1,   label: 'Sempre' },
+        { v: 0.9, label: '90%' },
+        { v: 0.8, label: '80%' },
+        { v: 0.5, label: '50%' },
+    ];
+
+    /* OPÇÃO 1: usa o Capitão (coleta em lote, claim_loads_multiple).
+       OPÇÃO 2: farma cidade a cidade (claim individual por aldeia). */
+    METHODS = [
+        { id: 'captain', label: '🧭 OPÇÃO 1 — Capitão (lote)' },
+        { id: 'single',  label: '👟 OPÇÃO 2 — Cidade a cidade' },
+    ];
+
     constructor(c, s) {
         super(c, s);
 
-        // Load the settings
-        this.timing = this.storage.load('af_level', 300000);
+        this.mode = this.storage.load('af_mode', 'turbo');
         this.percent = this.storage.load('af_percent', 1);
-        this.active = this.storage.load('af_active', false);
-        this.gui = this.storage.load('af_gui', false);
+        this.method = this.storage.load('af_method', 'captain');
+        this.active = false;
 
-        // Create the elements for the new menu
+        this._tickId = null;
+        this._claiming = false;
+        this._windowOpened = false;
+        this._warnedNoCaptain = false;
+
+        // Caches (relações por ilha / lista de cidades por colher)
+        this._islandRelations = null;
+        this._islandCacheAt = 0;
+        this._farmListCache = null;
+        this._farmListAt = 0;
+
+        this.stats = this.storage.load('af_stats', { claims: 0, lastClaimAt: 0 });
+
         const { $activity, $count } = this.createActivity("url(https://gpit.innogamescdn.com/images/game/premium_features/feature_icons_2.08.png) no-repeat 0 -240px");
         this.$activity = $activity;
         this.$count = $count;
@@ -17,33 +84,49 @@ var AutoFarm = class extends MultUtil {
         this.createDropdown();
         this.updateButtons();
 
-        this.timer = 0;
-        this.lastTime = Date.now();
-        if (this.active) this.active = this.createGuardedInterval(this.main, 5000);
+        if (this.storage.load('af_active', false)) {
+            setTimeout(() => this.start(), 3000);
+        }
     }
 
-    /* Create the dropdown menu */
+    /* ══════════════ UI ══════════════ */
+
     createDropdown = () => {
         this.$content = uw.$("<div></div>");
-        this.$title = uw.$("<p></p>").text(this.t('af_title')).css({ "text-align": "center", "margin": "2px", "font-weight": "bold", "font-size": "16px" });
+        this.$title = uw.$("<p></p>").text('⚡ AutoFarm Turbo').css({ "text-align": "center", "margin": "2px", "font-weight": "bold", "font-size": "16px" });
         this.$content.append(this.$title);
 
-        this.$duration = uw.$("<p></p>").text(this.t('af_duration')).css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$button5 = this.createButton("mult_farm_5", "5 min", this.toggleDuration);
-        this.$button10 = this.createButton("mult_farm_10", "10 min", this.toggleDuration);
-        this.$button20 = this.createButton("mult_farm_20", "20 min", this.toggleDuration);
-        this.$content.append(this.$duration, this.$button5, this.$button10, this.$button20);
+        this.$methodLabel = uw.$("<p></p>").text('Método de coleta:').css({ "text-align": "left", "margin": "4px 2px 2px", "font-weight": "bold" });
+        this.$content.append(this.$methodLabel);
+        this.$methodButtons = this.METHODS.map(m =>
+            this.createButton('mult_farm_method_' + m.id, m.label, this.toggleMethod)
+        );
+        this.$content.append(...this.$methodButtons);
 
-        this.$storage = uw.$("<p></p>").text(this.t('af_storage')).css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$button80 = this.createButton("mult_farm_80", "80%", this.toggleStorage).css({ "width": "70px" });
-        this.$button90 = this.createButton("mult_farm_90", "90%", this.toggleStorage).css({ "width": "80px" });
-        this.$button100 = this.createButton("mult_farm_100", "100%", this.toggleStorage).css({ "width": "80px" });
-        this.$content.append(this.$storage, this.$button80, this.$button90, this.$button100);
+        this.$modeLabel = uw.$("<p></p>").text('Duração da coleta (cooldown):').css({ "text-align": "left", "margin": "6px 2px 2px", "font-weight": "bold" });
+        this.$content.append(this.$modeLabel);
+        this.$modeButtons = this.MODES.map(m =>
+            this.createButton('mult_farm_mode_' + m.id, m.label, this.toggleMode)
+        );
+        this.$content.append(...this.$modeButtons);
 
-        this.$gui = uw.$("<p></p>").text(this.t('af_gui')).css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$guiOn = this.createButton("mult_farm_gui_on", "ON", this.toggleGui);
-        this.$guiOff = this.createButton("mult_farm_gui_off", "OFF", this.toggleGui);
-        this.$content.append(this.$gui, this.$guiOn, this.$guiOff);
+        this.$storageLabel = uw.$("<p></p>").text('Coletar só com armazém abaixo de:').css({ "text-align": "left", "margin": "6px 2px 2px", "font-weight": "bold" });
+        this.$content.append(this.$storageLabel);
+        this.$pctButtons = this.PERCENTS.map(p =>
+            this.createButton('mult_farm_pct_' + String(p.v).replace('0.', ''), p.label, this.togglePercent)
+        );
+        this.$content.append(...this.$pctButtons);
+
+        this.$claimNowLabel = uw.$("<p></p>").text('Ação imediata:').css({ "text-align": "left", "margin": "6px 2px 2px", "font-weight": "bold" });
+        this.$claimNow = this.createButton('mult_farm_claim_now', '⚡ Coletar já', this.claimNow);
+        this.$content.append(this.$claimNowLabel, this.$claimNow);
+
+        this.$status = uw.$('<div id="af_status_v2"></div>').css({
+            "text-align": "center", "margin": "8px 2px 2px",
+            "font-size": "11px", "color": "#5a3a0a",
+            "border-top": "1px solid rgba(90,58,10,0.25)", "padding-top": "6px",
+        });
+        this.$content.append(this.$status);
 
         this.$popup = this.createPopup(423, 250, 170, this.$content);
         this.$popup.css({ 'height': 'auto', 'min-height': '170px' });
@@ -54,214 +137,339 @@ var AutoFarm = class extends MultUtil {
             if (!this.dropdown_active) this.$popup.hide();
             this.dropdown_active = false;
         };
-
         const open = () => {
             if (this.dropdown_active) this.$popup.show();
         };
 
         this.$activity.on({
-            mouseenter: () => {
-                this.dropdown_active = true;
-                setTimeout(open, 1000);
-            },
-            mouseleave: () => {
-                this.dropdown_active = false;
-                setTimeout(close, 50);
-            }
+            mouseenter: () => { this.dropdown_active = true; setTimeout(open, 1000); },
+            mouseleave: () => { this.dropdown_active = false; setTimeout(close, 50); }
         });
-
         this.$popup.on({
-            mouseenter: () => {
-                this.dropdown_active = true;
-            },
-            mouseleave: () => {
-                this.dropdown_active = false;
-                setTimeout(close, 50);
-            }
+            mouseenter: () => { this.dropdown_active = true; },
+            mouseleave: () => { this.dropdown_active = false; setTimeout(close, 50); }
         });
-    }
+    };
 
-    /* Update the buttons */
     updateButtons = () => {
-        this.$button5.addClass('disabled');
-        this.$button10.addClass('disabled');
-        this.$button20.addClass('disabled');
-        this.$button80.addClass('disabled');
-        this.$button90.addClass('disabled');
-        this.$button100.addClass('disabled');
+        for (const btn of this.$methodButtons) btn.addClass('disabled');
+        for (const btn of this.$modeButtons) btn.addClass('disabled');
+        for (const btn of this.$pctButtons) btn.addClass('disabled');
 
-        if (this.timing == 300000) this.$button5.removeClass('disabled');
-        if (this.timing == 600000) this.$button10.removeClass('disabled');
-        if (this.timing == 1200000) this.$button20.removeClass('disabled');
+        const methodIdx = this.METHODS.findIndex(m => m.id === this.method);
+        if (methodIdx >= 0) this.$methodButtons[methodIdx].removeClass('disabled');
 
-        if (this.percent == 0.8) this.$button80.removeClass('disabled');
-        if (this.percent == 0.9) this.$button90.removeClass('disabled');
-        if (this.percent == 1) this.$button100.removeClass('disabled');
+        const modeIdx = this.MODES.findIndex(m => m.id === this.mode);
+        if (modeIdx >= 0) this.$modeButtons[modeIdx].removeClass('disabled');
+
+        const pctIdx = this.PERCENTS.findIndex(p => p.v === this.percent);
+        if (pctIdx >= 0) this.$pctButtons[pctIdx].removeClass('disabled');
 
         if (!this.active) {
             this.$count.css('color', "red");
             this.$count.text("");
         }
+    };
 
-        this.$guiOn.addClass('disabled');
-        this.$guiOff.addClass('disabled');
-        if (this.gui) this.$guiOn.removeClass('disabled');
-        else this.$guiOff.removeClass('disabled');
-    }
-
-    toggleDuration = (event) => {
+    toggleMethod = (event) => {
         const { id } = event.currentTarget;
-
-        if (id == "mult_farm_5") this.timing = 300000;
-        if (id == "mult_farm_10") this.timing = 600000;
-        if (id == "mult_farm_20") this.timing = 1200000;
-
-        this.storage.save('af_level', this.timing);
+        const method = this.METHODS.find(m => 'mult_farm_method_' + m.id === id);
+        if (!method) return;
+        this.method = method.id;
+        this.storage.save('af_method', this.method);
+        this._windowOpened = false; // força reabrir a janela se voltar ao Capitão
         this.updateButtons();
-    }
+        this.console.log('[AutoFarm] Método alterado: ' + method.label + '.');
+    };
 
-    toggleStorage = (event) => {
+    toggleMode = (event) => {
         const { id } = event.currentTarget;
+        const mode = this.MODES.find(m => 'mult_farm_mode_' + m.id === id);
+        if (!mode) return;
+        this.mode = mode.id;
+        this.storage.save('af_mode', this.mode);
+        this.updateButtons();
+        this.console.log('[AutoFarm] Modo alterado para ' + mode.label + ' (aplica-se à próxima coleta).');
+    };
 
-        if (id == "mult_farm_80") this.percent = 0.8;
-        if (id == "mult_farm_90") this.percent = 0.9;
-        if (id == "mult_farm_100") this.percent = 1;
-
+    togglePercent = (event) => {
+        const { id } = event.currentTarget;
+        const pct = this.PERCENTS.find(p => 'mult_farm_pct_' + String(p.v).replace('0.', '') === id);
+        if (!pct) return;
+        this.percent = pct.v;
         this.storage.save('af_percent', this.percent);
         this.updateButtons();
-    }
-
-    toggleGui = (event) => {
-        const { id } = event.currentTarget;
-
-        if (id == "mult_farm_gui_on") this.gui = true;
-        if (id == "mult_farm_gui_off") this.gui = false;
-
-        this.storage.save('af_gui', this.gui);
-        this.updateButtons();
-    }
-
-    /* Generate the list containing 1 polis per island */
-    generateList = () => {
-        const islands_list = new Set();
-        const polis_list = [];
-        let minResource = 0;
-        let min_percent = 0;
-
-        const { models: towns } = uw.MM.getOnlyCollectionByName('Town');
-
-        for (const town of towns) {
-            const { on_small_island, island_id, id } = town.attributes;
-            if (on_small_island || islands_list.has(island_id)) continue;
-
-            islands_list.add(island_id);
-
-            const { wood, stone, iron, storage } = uw.ITowns.getTown(id).resources();
-            minResource = Math.min(wood, stone, iron);
-            min_percent = storage > 0 ? minResource / storage : 0;
-
-            if (min_percent < this.percent) continue;
-
-            polis_list.push(town.id);
-        }
-
-        return polis_list;
     };
+
+    /* ══════════════ LIFECYCLE ══════════════ */
 
     toggle = () => {
-        if (this.active) {
-            clearInterval(this.active);
-            this.active = null;
-            this.updateButtons();
-        } else {
-            this.updateTimer();
-            this.active = this.createGuardedInterval(this.main, 5000);
-        }
-
-        this.storage.save('af_active', !!this.active);
+        if (this.active) this.stop();
+        else this.start();
     };
 
-    /* Return the time before the next collection */
-    getNextCollection = () => {
-        const collection = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation');
-        const models = collection?.models ?? [];
-        if (models.length === 0) return 0;
+    start = () => {
+        if (this.active) return;
+        this.active = true;
+        this.storage.save('af_active', true);
+        this._windowOpened = false;
+        this._islandRelations = null;
+        this._farmListCache = null;
+        this.updateButtons();
+        const mode = this.MODES.find(m => m.id === this.mode) || this.MODES[0];
+        this.console.log('[AutoFarm] ⚡ Turbo iniciado — modo ' + mode.label + '. Colheita por cidade no momento exato.');
+        this._tickId = this.createGuardedInterval(this._tick, 1000);
+        this._tick();
+    };
 
-        const lootCounts = {};
-        for (const model of models) {
-            const { lootable_at } = model.attributes;
-            lootCounts[lootable_at] = (lootCounts[lootable_at] || 0) + 1;
+    stop = () => {
+        this.active = false;
+        this.storage.save('af_active', false);
+        if (this._tickId) { clearInterval(this._tickId); this._tickId = null; }
+        this.updateButtons();
+        this.console.log('[AutoFarm] Turbo parado.');
+    };
+
+    /* ══════════════ CACHES / DADOS ══════════════ */
+
+    /* Mapa ilha 'x:y' -> [relações de aldeias rurais dessa ilha].
+       Construído a partir de FarmTown + FarmTownPlayerRelation.
+       Rebuild a cada 10 min (ou se vazio). */
+    _ensureIslandRelations = () => {
+        if (this._islandRelations && Date.now() - this._islandCacheAt < 600000) return;
+        const map = new Map();
+        try {
+            const { models: farmTowns } = uw.MM.getOnlyCollectionByName('FarmTown');
+            const ftIsland = new Map();
+            for (const f of farmTowns) {
+                ftIsland.set(String(f.attributes.id), f.attributes.island_x + ':' + f.attributes.island_y);
+            }
+            const { models: relations } = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation');
+            for (const r of relations) {
+                const a = r.attributes;
+                if (a.relation_status !== 1) continue;
+                const key = ftIsland.get(String(a.farm_town_id));
+                if (!key) continue;
+                if (!map.has(key)) map.set(key, []);
+                map.get(key).push(r);
+            }
+        } catch (e) {
+            this.console.log('[AutoFarm] Erro ao mapear ilhas: ' + (e && e.message ? e.message : e));
         }
+        this._islandRelations = map;
+        this._islandCacheAt = Date.now();
+    };
 
-        let maxLootableTime = 0;
-        let maxValue = 0;
-        for (const lootableTime in lootCounts) {
-            const value = lootCounts[lootableTime];
-            if (value > maxValue) {
-                maxLootableTime = lootableTime;
-                maxValue = value;
+    /* Uma cidade por ilha — a com MAIS ESPAÇO no armazém.
+       Cache de 30s (recursos mudam a cada coleta). */
+    _getFarmList = () => {
+        const now = Date.now();
+        if (this._farmListCache && now - this._farmListAt < 30000) return this._farmListCache;
+        const byIsland = new Map();
+        try {
+            const { models } = uw.MM.getOnlyCollectionByName('Town');
+            for (const t of models) {
+                const a = t.attributes;
+                if (a.on_small_island) continue;
+                const it = uw.ITowns.towns[a.id];
+                if (!it) continue;
+                const key = it.getIslandCoordinateX() + ':' + it.getIslandCoordinateY();
+                let fill = 1;
+                try {
+                    const r = it.resources();
+                    fill = r.storage > 0 ? Math.min(r.wood, r.stone, r.iron) / r.storage : 1;
+                } catch (e) {}
+                if (!byIsland.has(key)) byIsland.set(key, []);
+                byIsland.get(key).push({ id: String(a.id), key, fill });
+            }
+        } catch (e) {
+            return this._farmListCache || [];
+        }
+        const list = [];
+        for (const arr of byIsland.values()) {
+            arr.sort((x, y) => x.fill - y.fill); // mais espaço primeiro
+            list.push(arr[0]);
+        }
+        this._farmListCache = list;
+        this._farmListAt = now;
+        return list;
+    };
+
+    /* Verifica prontidão de cada cidade: pronta quando TODAS as
+       aldeias rurais da sua ilha estão lootable (max lootable_at).
+       Retorna { ready: [{id,key}], nextIn: segundos }. */
+    _scanReadiness = (ignoreJitter) => {
+        const now = Math.floor(Date.now() / 1000);
+        const ready = [];
+        let nextIn = Infinity;
+
+        for (const t of this._getFarmList()) {
+            const rels = this._islandRelations.get(t.key);
+            if (!rels || !rels.length) continue;
+
+            let readyAt = 0;
+            for (const r of rels) {
+                const la = r.attributes.lootable_at;
+                if (la !== null && la !== undefined && la > readyAt) readyAt = la;
+            }
+
+            if (readyAt <= now) {
+                // Jitter determinístico por cidade: 2–9s
+                const at = ignoreJitter ? 0 : readyAt + (parseInt(t.id, 10) % 8) + 2;
+                if (now >= at) ready.push(t);
+                else nextIn = Math.min(nextIn, at - now);
+            } else {
+                nextIn = Math.min(nextIn, readyAt - now);
             }
         }
-
-        const seconds = maxLootableTime - Math.floor(Date.now() / 1000);
-        return seconds > 0 ? seconds * 1000 : 0;
+        return { ready, nextIn: nextIn === Infinity ? 0 : nextIn };
     };
 
-    /* Call to update the timer */
-    updateTimer = () => {
-        const currentTime = Date.now();
-        this.timer -= currentTime - this.lastTime;
-        this.lastTime = currentTime;
+    /* ══════════════ TICKER (1s) ══════════════ */
 
-        const isCaptainActive = uw.GameDataPremium.isAdvisorActivated('captain');
-        this.$count.text(Math.round(Math.max(this.timer, 0) / 1000));
-        this.$count.css('color', isCaptainActive ? "#1aff1a" : "yellow");
-    };
-
-    /* Main loop */
-    main = async () => {
+    _tick = async () => {
+        if (!this.active || this._claiming) return;
         if (window.__multbot_captcha_active) return;
         try {
-            const next_collection = this.getNextCollection();
-            if (next_collection && (this.timer > next_collection + 60 * 1000 || this.timer < next_collection)) {
-                this.timer = next_collection + Math.floor(Math.random() * 20000) + 10000;
-            }
-
-            if (this.timer < 1) {
-                this.polis_list = this.generateList();
-
-                clearInterval(this.active);
-                this.active = null;
-
-                await this.claim();
-                this.active = this.createGuardedInterval(this.main, 5000);
-
-                const rand = Math.floor(Math.random() * 20000) + 10000;
-                this.timer = this.timing + rand;
-                if (this.timer < next_collection) this.timer = next_collection + rand;
-            }
-
-            this.updateTimer();
+            this._ensureIslandRelations();
+            const { ready, nextIn } = this._scanReadiness(false);
+            this._updateCountdown(ready.length, nextIn);
+            if (ready.length) await this._claimReady(ready);
         } catch (e) {
-            this.console.log('[AutoFarm] Erro no main(): ' + (e && e.message ? e.message : e));
-            if (!this.active) this.active = this.createGuardedInterval(this.main, 5000);
+            this.console.log('[AutoFarm] Erro no tick: ' + (e && e.message ? e.message : e));
         }
     };
 
-    /* =========================================================
-       HELPERS INTERNOS — retornam town_id atual para os payloads
-       ========================================================= */
-
-    /* Retorna o town_id da cidade atual do jogador */
-    _getCurrentTownId = () => {
-        return uw.ITowns.getCurrentTown().id;
+    _updateCountdown = (readyCount, nextIn) => {
+        try {
+            if (!this.active) { this.$count.text("").css('color', 'red'); return; }
+            const captain = uw.GameDataPremium.isAdvisorActivated('captain');
+            this.$count.css('color', captain ? "#1aff1a" : "yellow");
+            this.$count.text(readyCount > 0 ? "GO" : nextIn);
+        } catch (e) {}
+        try {
+            const mode = this.MODES.find(m => m.id === this.mode) || this.MODES[0];
+            const method = this.METHODS.find(m => m.id === this.method) || this.METHODS[0];
+            uw.$('#af_status_v2').html(
+                method.label + ' · ' + mode.label + ' · ' +
+                (this.active
+                    ? '<span style="color:#1a6b2a;font-weight:bold;">● ATIVO</span>'
+                    : '<span style="color:#c0392b;font-weight:bold;">● PARADO</span>') +
+                '<br>Prontas agora: <b>' + readyCount + '</b> · próxima em <b>' + nextIn + 's</b>' +
+                '<br>Coletas: <b>' + this.stats.claims + '</b> · última: ' +
+                (this.stats.lastClaimAt ? new Date(this.stats.lastClaimAt).toLocaleTimeString() : '—')
+            );
+        } catch (e) {}
     };
 
-    /* =========================================================
-       CLAIM METHODS
-       ========================================================= */
+    /* ══════════════ COLETA ══════════════ */
 
-    /* Claim resources from a single polis (sem Captain) */
+    claimNow = async () => {
+        if (this._claiming) return;
+        if (!this.active) {
+            this.console.log('[AutoFarm] Ativa primeiro o AutoFarm (clica no ícone).');
+            return;
+        }
+        try {
+            this._ensureIslandRelations();
+            const { ready } = this._scanReadiness(true); // ignora jitter
+            if (!ready.length) {
+                this.console.log('[AutoFarm] Nada pronto para colher já.');
+                return;
+            }
+            this.console.log('[AutoFarm] ⚡ Coleta manual: ' + ready.length + ' cidade(s).');
+            await this._claimReady(ready);
+        } catch (e) {
+            this.console.log('[AutoFarm] Erro na coleta manual: ' + (e && e.message ? e.message : e));
+        }
+    };
+
+    _claimReady = async (towns) => {
+        this._claiming = true;
+        try {
+            // Filtro de espaço no armazém (leitura fresca, pós-cache)
+            const eligible = [];
+            for (const t of towns) {
+                try {
+                    const it = uw.ITowns.towns[t.id];
+                    if (!it) continue;
+                    const r = it.resources();
+                    const fill = r.storage > 0 ? Math.min(r.wood, r.stone, r.iron) / r.storage : 1;
+                    if (this.percent >= 1 || fill < this.percent) eligible.push(t);
+                } catch (e) {}
+            }
+            if (!eligible.length) return;
+
+            const mode = this.MODES.find(m => m.id === this.mode) || this.MODES[0];
+            const useCaptain = this.method === 'captain';
+            const captainActive = uw.GameDataPremium.isAdvisorActivated('captain');
+
+            // OPÇÃO 1 — Capitão (lote). Se o Capitão não estiver ativo,
+            // avisa (uma vez por sessão) e usa o método individual.
+            if (useCaptain) {
+                if (!captainActive) {
+                    if (!this._warnedNoCaptain) {
+                        this._warnedNoCaptain = true;
+                        this.console.log('[AutoFarm] ⚠ Capitão não está ativo — OPÇÃO 1 exige Capitão. A usar cidade a cidade.');
+                    }
+                } else {
+                    try {
+                        // Janela de farm simulada UMA vez por sessão (não por ciclo!)
+                        if (!this._windowOpened) {
+                            await this.fakeOpening();
+                            await this.sleep(1200, 300);
+                            await this.fakeSelectAll(eligible.map(t => parseInt(t.id, 10)));
+                            this._windowOpened = true;
+                            await this.sleep(1200, 300);
+                        }
+                        await this._claimBatched(eligible.map(t => parseInt(t.id, 10)), mode.base, mode.booty);
+                        this.stats.claims += eligible.length;
+                        this.console.log('[AutoFarm] 🧭 ' + eligible.length + ' cidade(s) colhida(s) via Capitão [' + mode.label + '].');
+                        this._afterClaim();
+                        return;
+                    } catch (e) {
+                        this.console.log('[AutoFarm] claimMultiple falhou (' + (e && e.message ? e.message : e) + ') — coleta individual.');
+                        this._windowOpened = false;
+                        // cai para o método individual abaixo
+                    }
+                }
+            }
+
+            // OPÇÃO 2 — Cidade a cidade (também fallback da Opção 1)
+            const count = await this._claimOneByOne(eligible);
+            this.stats.claims += count;
+            if (count > 0) this.console.log('[AutoFarm] 👟 ' + count + ' aldeia(s) colhida(s) cidade a cidade.');
+        } finally {
+            this._claiming = false;
+            this.stats.lastClaimAt = Date.now();
+            this.storage.save('af_stats', this.stats);
+        }
+    };
+
+    _afterClaim = () => {
+        try { this.fakeUpdate(); } catch (e) {}
+        try {
+            setTimeout(function () {
+                uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers();
+            }, 2000);
+        } catch (e) {}
+    };
+
+    /* Lotes de 25 com pausa curta de 1.2s — bem mais rápido que
+       os lotes de 20 com 2s da versão antiga. */
+    _claimBatched = async (town_ids, base, booty) => {
+        const BATCH_SIZE = 25;
+        for (let i = 0; i < town_ids.length; i += BATCH_SIZE) {
+            const batch = town_ids.slice(i, i + BATCH_SIZE);
+            await this.claimMultiple(batch, base, booty);
+            if (i + BATCH_SIZE < town_ids.length) {
+                await this.sleep(1200, 300);
+            }
+        }
+    };
+
+    /* ══════════════ ENDPOINTS (confirmados por captura) ══════════════ */
+
     claimSingle = async (town_id, farm_town_id, relation_id, option) => {
         if (option === undefined) option = 1;
         const data = {
@@ -281,24 +489,10 @@ var AutoFarm = class extends MultUtil {
         }
     };
 
-    /* Claim resources from multiple polis (Captain ativo)
-       Payload confirmado pelas screenshots do F12:
-       Form Data: towns[], time_option_base, time_option_booty,
-                  claim_factor, town_id, nl_init:true
-       Query String: town_id, action, h
-
-       Valores validos de time_option confirmados pelo loads_data da resposta:
-         600   = 10 minutos (base padrao)
-         2400  = 40 minutos (booty padrao / base alternativa)
-         10800 = 3 horas
-         28800 = 8 horas
-       NUNCA usar 300 ou 1200 — o servidor rejeita silenciosamente. */
     claimMultiple = async (polis_list, base, boost) => {
         if (base === undefined) base = 600;
         if (boost === undefined) boost = 2400;
-
-        const town_id = this._getCurrentTownId();
-
+        const town_id = uw.ITowns.getCurrentTown().id;
         const data = {
             towns: polis_list,
             time_option_base: base,
@@ -315,11 +509,9 @@ var AutoFarm = class extends MultUtil {
         }
     };
 
-    /* Simula abertura da janela Farm Town Overview
-       Payload confirmado: town_id + nl_init:true (Image 1) */
     fakeOpening = async () => {
         try {
-            const town_id = this._getCurrentTownId();
+            const town_id = uw.ITowns.getCurrentTown().id;
             await this.ajaxGetWithTimeout('farm_town_overviews', 'index', {
                 town_id: town_id,
                 nl_init: true,
@@ -332,12 +524,10 @@ var AutoFarm = class extends MultUtil {
         }
     };
 
-    /* Simula o usuario selecionando todas as cidades
-       Payload confirmado: town_ids[], town_id, nl_init:true (Image 3) */
-    fakeSelectAll = async () => {
-        const town_id = this._getCurrentTownId();
+    fakeSelectAll = async (town_ids) => {
+        const town_id = uw.ITowns.getCurrentTown().id;
         const data = {
-            town_ids: this.polis_list,
+            town_ids: town_ids,
             town_id: town_id,
             nl_init: true,
         };
@@ -349,10 +539,6 @@ var AutoFarm = class extends MultUtil {
         }
     };
 
-    /* Simula update da janela (chamado ao abrir e apos claim)
-       Payload confirmado: island_x, island_y, current_town_id,
-       booty_researched, diplomacy_researched, trade_office,
-       town_id, nl_init:true (Images 2 e 6) */
     fakeUpdate = async () => {
         const town = uw.ITowns.getCurrentTown();
         const researches = town.getResearches() && town.getResearches().attributes ? town.getResearches().attributes : {};
@@ -375,148 +561,42 @@ var AutoFarm = class extends MultUtil {
         }
     };
 
-    /* Coleta via GUI real (abre a janela de verdade) */
-    fakeGuiUpdate = async () => {
-        uw.$(".toolbar_button.premium .icon").trigger('mouseenter');
-        await this.sleep(1019.39, 127.54);
-
-        uw.$(".farm_town_overview a").trigger('click');
-        await this.sleep(1156.65, 165.62);
-
-        uw.$(".checkbox.select_all").trigger("click");
-        await this.sleep(1036.20, 135.69);
-
-        uw.$("#fto_claim_button").trigger("click");
-        await this.sleep(1036.20, 135.69);
-
-        const el = uw.$(".confirmation .btn_confirm.button_new");
-        if (el.length) {
-            el.trigger("click");
-            await this.sleep(1036.20, 135.69);
-        }
-
-        uw.$(".icon_right.icon_type_speed.ui-dialog-titlebar-close").trigger("click");
-    };
-
-    /* Divide polis_list em lotes de 20 e chama claimMultiple por lote.
-       Evita timeout quando o jogador tem muitas cidades (57 no caso atual).
-       Cada lote tem pausa de 2s entre si para nao sobrecarregar o servidor. */
-    claimMultipleBatched = async (polis_list, base, boost) => {
-        var BATCH_SIZE = 20;
-        for (var i = 0; i < polis_list.length; i += BATCH_SIZE) {
-            var batch = polis_list.slice(i, i + BATCH_SIZE);
-            await this.claimMultiple(batch, base, boost);
-            if (i + BATCH_SIZE < polis_list.length) {
-                await this.sleep(2000, 500);
-            }
-        }
-    };
-
-    /* Orchestrator: decide qual caminho usar */
-    claim = async () => {
-        const isCaptainActive = uw.GameDataPremium.isAdvisorActivated('captain');
-
-        /* Reutilizamos this.polis_list que ja foi setada no main() */
-        const polis_list = this.polis_list;
-
-        if (isCaptainActive && !this.gui) {
-            /* Caminho rapido AJAX (Captain ativo, GUI desligado):
-               Dividido em lotes de 20 via claimMultipleBatched para
-               evitar timeout com 57 cidades (limite original: 45s). */
-            try {
-                await this.fakeOpening();
-                await this.sleep(2000, 500);
-                await this.fakeSelectAll();
-                await this.sleep(2000, 500);
-
-                /* Mapeamento timing -> time_option confirmado pelo loads_data:
-                   5 min  (300000ms)  -> base=600,   booty=2400
-                   10 min (600000ms)  -> base=600,   booty=2400
-                   20 min (1200000ms) -> base=2400,  booty=10800
-                   Valores validos: 600, 2400, 10800, 28800 (segundos) */
-                if (this.timing <= 600000) {
-                    await this.claimMultipleBatched(polis_list, 600, 2400);
-                } else {
-                    await this.claimMultipleBatched(polis_list, 2400, 10800);
-                }
-
-                await this.fakeUpdate();
-                setTimeout(function() { uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers(); }, 2000);
-                return;
-            } catch (e) {
-                this.console.log('[AutoFarm] Caminho AJAX direto falhou (' + (e && e.message ? e.message : e) + '), tentando via GUI...');
-                try {
-                    await this.fakeGuiUpdate();
-                    return;
-                } catch (e2) {
-                    this.console.log('[AutoFarm] Caminho GUI tambem falhou (' + (e2 && e2.message ? e2.message : e2) + '), usando coleta individual.');
-                }
-            }
-        } else if (isCaptainActive && this.gui) {
-            try {
-                await this.fakeGuiUpdate();
-                return;
-            } catch (e) {
-                this.console.log('[AutoFarm] Modo GUI falhou (' + (e && e.message ? e.message : e) + '), usando coleta individual.');
-            }
-        }
-
-        /* Fallback: coleta uma por uma (sem Captain ou apos falhas) */
-        await this._claimOneByOne(polis_list);
-    };
-
-    /* Coleta cidade a cidade, respeitando limite de 60 por ciclo. */
-    _claimOneByOne = async (polis_list) => {
+    /* Coleta cidade a cidade (fallback). Sem Captain usa sempre a
+       opção curta — a frequência fica a cargo do ticker de prontidão. */
+    _claimOneByOne = async (eligible) => {
         let max = 60;
-        const { models: player_relation_models } = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation');
-        const { models: farm_town_models } = uw.MM.getOnlyCollectionByName('FarmTown');
-        const now = Math.floor(Date.now() / 1000);
+        let count = 0;
+        try {
+            const { models: relations } = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation');
+            const { models: farmTowns } = uw.MM.getOnlyCollectionByName('FarmTown');
+            const now = Math.floor(Date.now() / 1000);
 
-        for (let town_id of polis_list) {
-            let town = uw.ITowns.towns[town_id];
-            let x = town.getIslandCoordinateX();
-            let y = town.getIslandCoordinateY();
+            const ftIsland = new Map();
+            for (const f of farmTowns) {
+                ftIsland.set(String(f.attributes.id), f.attributes.island_x + ':' + f.attributes.island_y);
+            }
 
-            for (let farm_town of farm_town_models) {
-                if (farm_town.attributes.island_x != x) continue;
-                if (farm_town.attributes.island_y != y) continue;
+            for (const t of eligible) {
+                const it = uw.ITowns.towns[t.id];
+                if (!it) continue;
+                const key = it.getIslandCoordinateX() + ':' + it.getIslandCoordinateY();
 
-                for (let relation of player_relation_models) {
-                    if (farm_town.attributes.id != relation.attributes.farm_town_id) continue;
-                    if (relation.attributes.relation_status !== 1) continue;
-                    if (relation.attributes.lootable_at !== null && now < relation.attributes.lootable_at) continue;
+                for (const rel of relations) {
+                    const a = rel.attributes;
+                    if (ftIsland.get(String(a.farm_town_id)) !== key) continue;
+                    if (a.relation_status !== 1) continue;
+                    if (a.lootable_at !== null && a.lootable_at !== undefined && now < a.lootable_at) continue;
 
-                    await this.claimSingle(town_id, relation.attributes.farm_town_id, relation.id, Math.ceil(this.timing / 600000));
+                    await this.claimSingle(parseInt(t.id, 10), a.farm_town_id, rel.id, 1);
                     await this.sleep(500);
-                    if (!max) return;
-                    else max -= 1;
+                    count++;
+                    if (--max <= 0) { this._afterClaim(); return count; }
                 }
             }
+        } catch (e) {
+            this.console.log('[AutoFarm] Erro na coleta individual: ' + (e && e.message ? e.message : e));
         }
-
-        setTimeout(function() { uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers(); }, 2000);
-    };
-
-    /* Return the total resources of the polis in the list */
-    getTotalResources = () => {
-        const polis_list = this.generateList();
-
-        let total = {
-            wood: 0,
-            stone: 0,
-            iron: 0,
-            storage: 0,
-        };
-
-        for (let town_id of polis_list) {
-            const town = uw.ITowns.getTown(town_id);
-            const { wood, stone, iron, storage } = town.resources();
-            total.wood += wood;
-            total.stone += stone;
-            total.iron += iron;
-            total.storage += storage;
-        }
-
-        return total;
+        this._afterClaim();
+        return count;
     };
 };
