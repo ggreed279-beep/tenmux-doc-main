@@ -98,8 +98,10 @@ var Sniper = class extends MultUtil {
     // ─────────────────────────────────────────────────────────────
 
     _getTimeZoneSetting() {
-        try { return this.storage.load('sniper_timezone', 'local'); }
-        catch (e) { return 'local'; }
+        // DEFAULT: Argentina (o fuso que o jogo te mostra). Se quiseres
+        // Portugal ou outro, é só escolher no seletor das definições.
+        try { return this.storage.load('sniper_timezone', 'America/Argentina/Buenos_Aires'); }
+        catch (e) { return 'America/Argentina/Buenos_Aires'; }
     }
 
     setTimeZone = (value) => {
