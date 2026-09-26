@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════════════════
-// MODULE: AutoFestival v1.4.3 (Correção: Toggle Sempre Ativo)
+// MODULE: AutoFestival v1.4.4 (Toggle ON/OFF + Auto-Stop ao concluir)
 // ═══════════════════════════════════════════════════════
 
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.4.3';
+    VERSION = '1.4.4';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
@@ -28,7 +28,7 @@ var AutoFestival = class extends MultUtil {
     constructor(c, s) {
         super(c, s);
         // Define como ativo por padrão se não houver estado salvo, ou respeita o salvo
-        const wasActive = this.storage.load(this.STORAGE_KEY_ACTIVE, true); 
+        const wasActive = this.storage.load(this.STORAGE_KEY_ACTIVE, true);
         if (wasActive) {
             setTimeout(() => { if (!this._active) this.start(); }, 3000);
         }
@@ -106,7 +106,8 @@ var AutoFestival = class extends MultUtil {
                         '2. <b>Todas as doadoras</b> enviam remessas de <b>até 500 fixos</b>.<br>' +
                         '3. <b>PROTEÇÃO ANTI-LOOP:</b> Cidades que recebem recursos estão <b>BLOQUEADAS</b> para doar.<br>' +
                         '4. Só avança para a 2ª cidade quando a 1ª atingir <b>🪵15k · 🪨18k · ⚙15k</b>.<br>' +
-                        '5. Limpeza automática de pendências ao atingir a meta.' +
+                        '5. Limpeza automática de pendências ao atingir a meta.<br>' +
+                        '6. <b>DESLIGA AUTOMATICAMENTE</b> quando todas as cidades estiverem concluídas.' +
                     '</div>' +
                 '</div>' +
                 '<div class="mbhudf-section">' +
@@ -126,8 +127,11 @@ var AutoFestival = class extends MultUtil {
         );
     };
 
-    // ALTERAÇÃO: Agora apenas ativa. Se já estiver ativo, o método start() ignora a chamada.
-    toggle = () => { this.start(); };
+    // ALTERAÇÃO: Toggle volta a alternar entre ligar e desligar
+    toggle = () => {
+        if (this._active) this.stop();
+        else this.start();
+    };
 
     start() {
         if (this._active) return;
@@ -141,7 +145,6 @@ var AutoFestival = class extends MultUtil {
         }, this.CONFIG.intervalMs);
     }
 
-    // Método stop() mantido para uso interno se necessário, mas não é mais chamado pelo toggle
     stop() {
         if (!this._active) return;
         this._active = false;
@@ -322,7 +325,7 @@ var AutoFestival = class extends MultUtil {
                 continue;
             }
             if (this._sendingQueue[tid]) continue;
-            
+
             if (dirty) this._savePending(pending);
             return tid; // RETORNA A PRIMEIRA QUE PRECISA (PRIORIDADE MÁXIMA)
         }
@@ -337,10 +340,10 @@ var AutoFestival = class extends MultUtil {
 
         for (const t of all) {
             const tid = t.id;
-            
+
             // 1. Não pode doar para si mesma
             if (tid === targetId) continue;
-            
+
             // 2. Não doar se já tem festival ativo
             if (this._hasActiveFestival(tid)) continue;
 
@@ -361,7 +364,7 @@ var AutoFestival = class extends MultUtil {
             try {
                 const town = uw.ITowns.towns[tid];
                 const cap = town.getAvailableTradeCapacity ? town.getAvailableTradeCapacity() : 99999;
-                if (cap < 100) continue; 
+                if (cap < 100) continue;
             } catch(e) {}
 
             donors.push(tid);
@@ -402,9 +405,9 @@ var AutoFestival = class extends MultUtil {
 
             const targetId = this._getTargetTown();
             if (!targetId) {
-                // ALTERAÇÃO: Removido this.stop() para que o script continue a monitorizar indefinidamente
-                this._log('✅ Todas as cidades elegíveis estão abastecidas ou com festival ativo. Continuando a monitorizar...', 'ok');
-                this._refreshUI();
+                // ALTERAÇÃO: Desativa automaticamente quando tudo estiver concluído (sem monitorização contínua)
+                this._log('✅ Todas as cidades elegíveis estão abastecidas ou com festival ativo. Módulo desativado.', 'ok');
+                this.stop();
                 return;
             }
 
