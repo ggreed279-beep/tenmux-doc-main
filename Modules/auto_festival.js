@@ -1,18 +1,18 @@
 // ═══════════════════════════════════════════════════════
-// MODULE: AutoFestival v1.2.0 (HUD Edition - 500 Fixed)
+// MODULE: AutoFestival v1.3.0 (Prioridade Única + Anti-Falha)
 // ═══════════════════════════════════════════════════════
 
 var AutoFestival = class extends MultUtil {
-    VERSION = '1.2.0';
+    VERSION = '1.3.0';
     PREFIX = '[AutoFestival]';
 
     CONFIG = Object.freeze({
         cost: { wood: 15000, stone: 18000, iron: 15000 },
         intervalMs: 30000,
         pendingTimeoutMs: 120000,
-        donorMinResource: 500,      // Mínimo que o doador precisa ter
-        donorFixedAmount: 500,      // ⬅️ NOVO: Envia 500 fixos de cada recurso
-        minSendTotal: 100,
+        donorMinResource: 100,      // Mínimo absoluto para considerar como doador
+        donorFixedAmount: 500,      // Envia até 500 fixos de cada recurso por viagem
+        minSendTotal: 100,          // Mínimo total de recursos por envio para valer a pena
         logLimit: 80,
         academyMinLevel: 30,
     });
@@ -24,7 +24,6 @@ var AutoFestival = class extends MultUtil {
     _active = false;
     _intervalId = null;
     _sendingQueue = {};
-    _lastStatusUpdate = 0;
 
     constructor(c, s) {
         super(c, s);
@@ -33,317 +32,56 @@ var AutoFestival = class extends MultUtil {
         }
     }
 
-    // ══════════════════════════════════════════════════
-    //  ESTILOS HUD (injetados uma só vez)
-    // ══════════════════════════════════════════════════
     _injectStyles() {
         if (uw.$('#mbhud-festival-styles').length) return;
         const css = `
-            @keyframes mbhudf-pulse {
-                0%, 100% { opacity: 1; transform: scale(1); }
-                50% { opacity: 0.55; transform: scale(1.25); }
-            }
-            @keyframes mbhudf-scan {
-                0%   { background-position: 200% 0%; }
-                100% { background-position: -200% 0%; }
-            }
-            @keyframes mbhudf-fade {
-                from { opacity: 0; transform: translateY(-3px); }
-                to   { opacity: 1; transform: translateY(0); }
-            }
-
-            .mbhudf-root {
-                background: linear-gradient(135deg, #060816 0%, #0a1020 50%, #060816 100%);
-                border: 1px solid rgba(34,211,238,0.35);
-                border-radius: 6px;
-                padding: 12px;
-                font-family: 'SF Mono','Consolas','Monaco','Menlo',monospace;
-                color: #a8b8d0;
-                box-shadow: 0 0 24px rgba(34,211,238,0.15), inset 0 0 60px rgba(34,211,238,0.03);
-                position: relative;
-                overflow: hidden;
-                animation: mbhudf-fade 0.35s ease;
-                margin-bottom: 20px;
-            }
-            .mbhudf-root::before {
-                content: '';
-                position: absolute;
-                top: 0; left: 0; right: 0; height: 2px;
-                background: linear-gradient(90deg, transparent, #22d3ee, transparent);
-                background-size: 200% 100%;
-                animation: mbhudf-scan 3.5s linear infinite;
-                pointer-events: none;
-            }
-            .mbhudf-root::after {
-                content: '';
-                position: absolute;
-                inset: 0;
-                background-image:
-                    linear-gradient(rgba(34,211,238,0.035) 1px, transparent 1px),
-                    linear-gradient(90deg, rgba(34,211,238,0.035) 1px, transparent 1px);
-                background-size: 22px 22px;
-                pointer-events: none;
-                opacity: 0.5;
-            }
-
-            .mbhudf-header {
-                text-align: center;
-                padding: 4px 0 12px;
-                border-bottom: 1px solid rgba(34,211,238,0.2);
-                margin-bottom: 12px;
-                position: relative;
-                z-index: 1;
-            }
-            .mbhudf-header h2 {
-                margin: 0;
-                font-size: 14px;
-                letter-spacing: 6px;
-                text-transform: uppercase;
-                color: #22d3ee;
-                text-shadow: 0 0 12px rgba(34,211,238,0.7), 0 0 26px rgba(34,211,238,0.3);
-                font-weight: 700;
-                font-family: inherit;
-            }
-            .mbhudf-header .sub {
-                font-size: 9px;
-                color: #4a5a6a;
-                letter-spacing: 3px;
-                margin-top: 5px;
-                text-transform: uppercase;
-            }
-            .mbhudf-header .sub .live {
-                color: #00ff88;
-                text-shadow: 0 0 8px rgba(0,255,136,0.6);
-                font-variant-numeric: tabular-nums;
-            }
-
-            .mbhudf-section {
-                background: rgba(10,16,32,0.6);
-                border: 1px solid rgba(34,211,238,0.2);
-                border-radius: 4px;
-                padding: 10px 12px;
-                margin-bottom: 10px;
-                position: relative;
-                z-index: 1;
-            }
-            .mbhudf-label {
-                display: block;
-                font-size: 9px;
-                letter-spacing: 2.5px;
-                text-transform: uppercase;
-                color: #22d3ee;
-                margin-bottom: 8px;
-                text-shadow: 0 0 8px rgba(34,211,238,0.6);
-                font-weight: 700;
-            }
+            @keyframes mbhudf-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(1.25); } }
+            @keyframes mbhudf-scan { 0% { background-position: 200% 0%; } 100% { background-position: -200% 0%; } }
+            @keyframes mbhudf-fade { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+            .mbhudf-root { background: linear-gradient(135deg, #060816 0%, #0a1020 50%, #060816 100%); border: 1px solid rgba(34,211,238,0.35); border-radius: 6px; padding: 12px; font-family: 'SF Mono','Consolas',monospace; color: #a8b8d0; box-shadow: 0 0 24px rgba(34,211,238,0.15); position: relative; overflow: hidden; animation: mbhudf-fade 0.35s ease; margin-bottom: 20px; }
+            .mbhudf-root::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, #22d3ee, transparent); background-size: 200% 100%; animation: mbhudf-scan 3.5s linear infinite; pointer-events: none; }
+            .mbhudf-header { text-align: center; padding: 4px 0 12px; border-bottom: 1px solid rgba(34,211,238,0.2); margin-bottom: 12px; }
+            .mbhudf-header h2 { margin: 0; font-size: 14px; letter-spacing: 6px; text-transform: uppercase; color: #22d3ee; text-shadow: 0 0 12px rgba(34,211,238,0.7); font-weight: 700; }
+            .mbhudf-header .sub { font-size: 9px; color: #4a5a6a; letter-spacing: 3px; margin-top: 5px; text-transform: uppercase; }
+            .mbhudf-header .sub .live { color: #00ff88; text-shadow: 0 0 8px rgba(0,255,136,0.6); font-variant-numeric: tabular-nums; }
+            .mbhudf-section { background: rgba(10,16,32,0.6); border: 1px solid rgba(34,211,238,0.2); border-radius: 4px; padding: 10px 12px; margin-bottom: 10px; }
+            .mbhudf-label { display: block; font-size: 9px; letter-spacing: 2.5px; text-transform: uppercase; color: #22d3ee; margin-bottom: 8px; font-weight: 700; }
             .mbhudf-label::before { content: '▸ '; opacity: 0.7; }
-
-            .mbhudf-desc {
-                font-size: 10px;
-                color: #6a7a8a;
-                line-height: 1.7;
-                letter-spacing: 0.3px;
-            }
-            .mbhudf-desc b {
-                color: #22d3ee;
-                text-shadow: 0 0 6px rgba(34,211,238,0.45);
-                font-weight: 700;
-            }
-
-            .mbhudf-stats {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-                gap: 6px;
-            }
-            .mbhudf-stat {
-                background: rgba(0,0,0,0.35);
-                border: 1px solid rgba(34,211,238,0.18);
-                border-radius: 4px;
-                padding: 6px 8px;
-                text-align: center;
-                transition: all 0.2s;
-            }
-            .mbhudf-stat .n {
-                font-size: 18px;
-                font-weight: 700;
-                line-height: 1.1;
-                font-variant-numeric: tabular-nums;
-                text-shadow: 0 0 8px currentColor;
-            }
-            .mbhudf-stat .t {
-                font-size: 8px;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                color: #5a6a7a;
-                margin-top: 2px;
-            }
-            .mbhudf-stat.on   .n { color: #00ff88; }
-            .mbhudf-stat.info .n { color: #22d3ee; }
-            .mbhudf-stat.warn .n { color: #ffb020; }
-            .mbhudf-stat.pend .n { color: #a78bfa; }
-
-            .mbhudf-townlist {
-                max-height: 220px;
-                overflow-y: auto;
-                border-radius: 4px;
-                background: rgba(0,0,0,0.25);
-                border: 1px solid rgba(34,211,238,0.12);
-                padding: 2px;
-                scrollbar-width: thin;
-                scrollbar-color: rgba(34,211,238,0.3) transparent;
-            }
-            .mbhudf-townlist::-webkit-scrollbar { width: 8px; }
-            .mbhudf-townlist::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
-            .mbhudf-townlist::-webkit-scrollbar-thumb {
-                background: rgba(34,211,238,0.3);
-                border-radius: 4px;
-            }
-
-            .mbhudf-town {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                padding: 6px 8px;
-                border-bottom: 1px solid rgba(34,211,238,0.08);
-                font-size: 11px;
-                transition: background 0.2s;
-                font-family: inherit;
-            }
+            .mbhudf-desc { font-size: 10px; color: #6a7a8a; line-height: 1.7; }
+            .mbhudf-desc b { color: #22d3ee; font-weight: 700; }
+            .mbhudf-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 6px; }
+            .mbhudf-stat { background: rgba(0,0,0,0.35); border: 1px solid rgba(34,211,238,0.18); border-radius: 4px; padding: 6px 8px; text-align: center; }
+            .mbhudf-stat .n { font-size: 18px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; text-shadow: 0 0 8px currentColor; }
+            .mbhudf-stat .t { font-size: 8px; letter-spacing: 2px; text-transform: uppercase; color: #5a6a7a; margin-top: 2px; }
+            .mbhudf-stat.on .n { color: #00ff88; } .mbhudf-stat.info .n { color: #22d3ee; } .mbhudf-stat.warn .n { color: #ffb020; } .mbhudf-stat.pend .n { color: #a78bfa; }
+            .mbhudf-townlist { max-height: 220px; overflow-y: auto; border-radius: 4px; background: rgba(0,0,0,0.25); border: 1px solid rgba(34,211,238,0.12); padding: 2px; }
+            .mbhudf-town { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid rgba(34,211,238,0.08); font-size: 11px; }
             .mbhudf-town:last-child { border-bottom: none; }
-            .mbhudf-town:hover { background: rgba(34,211,238,0.05); }
-            .mbhudf-town .star {
-                color: #ffb020;
-                text-shadow: 0 0 8px rgba(255,176,32,0.6);
-                font-size: 12px;
-                width: 12px;
-                text-align: center;
-                flex-shrink: 0;
-            }
-            .mbhudf-town .name {
-                color: #e8f0ff;
-                font-weight: 700;
-                letter-spacing: 0.3px;
-                flex: 1;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                min-width: 0;
-            }
-            .mbhudf-town .res {
-                color: #6a7a8a;
-                font-size: 10px;
-                font-variant-numeric: tabular-nums;
-                white-space: nowrap;
-                letter-spacing: 0.2px;
-            }
-            .mbhudf-town .res .pend {
-                color: #a78bfa;
-                margin-left: 3px;
-            }
-
-            .mbhudf-pill {
-                padding: 3px 9px;
-                border-radius: 12px;
-                font-size: 8px;
-                font-weight: 700;
-                letter-spacing: 1.2px;
-                text-transform: uppercase;
-                border: 1px solid;
-                white-space: nowrap;
-                flex-shrink: 0;
-                font-family: inherit;
-            }
-            .mbhudf-pill.ready {
-                background: rgba(0,255,136,0.12);
-                border-color: rgba(0,255,136,0.5);
-                color: #00ff88;
-                text-shadow: 0 0 6px rgba(0,255,136,0.4);
-            }
-            .mbhudf-pill.active {
-                background: rgba(34,211,238,0.14);
-                border-color: rgba(34,211,238,0.55);
-                color: #22d3ee;
-                text-shadow: 0 0 6px rgba(34,211,238,0.45);
-                animation: mbhudf-pulse 2s ease-in-out infinite;
-            }
-            .mbhudf-pill.waiting {
-                background: rgba(255,176,32,0.10);
-                border-color: rgba(255,176,32,0.45);
-                color: #ffb020;
-                text-shadow: 0 0 6px rgba(255,176,32,0.4);
-            }
-
-            .mbhudf-led {
-                display: inline-block;
-                width: 8px;
-                height: 8px;
-                border-radius: 50%;
-                flex-shrink: 0;
-                border: 1px solid rgba(255,255,255,0.08);
-            }
-            .mbhudf-led.ready {
-                background: #00ff88;
-                box-shadow: 0 0 8px #00ff88, 0 0 14px rgba(0,255,136,0.55);
-                animation: mbhudf-pulse 2s ease-in-out infinite;
-            }
-            .mbhudf-led.active {
-                background: #22d3ee;
-                box-shadow: 0 0 8px #22d3ee, 0 0 14px rgba(34,211,238,0.55);
-                animation: mbhudf-pulse 1.4s ease-in-out infinite;
-            }
-            .mbhudf-led.waiting {
-                background: #ffb020;
-                box-shadow: 0 0 8px #ffb020;
-                animation: mbhudf-pulse 1.8s ease-in-out infinite;
-            }
-
-            .mbhudf-log {
-                font-size: 10px;
-                line-height: 1.7;
-                max-height: 120px;
-                overflow-y: auto;
-                background: rgba(0,0,0,0.35);
-                border: 1px solid rgba(34,211,238,0.12);
-                border-radius: 4px;
-                padding: 6px 8px;
-                letter-spacing: 0.2px;
-                font-family: inherit;
-                scrollbar-width: thin;
-                scrollbar-color: rgba(34,211,238,0.3) transparent;
-            }
-            .mbhudf-log::-webkit-scrollbar { width: 8px; }
-            .mbhudf-log::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
-            .mbhudf-log::-webkit-scrollbar-thumb {
-                background: rgba(34,211,238,0.3);
-                border-radius: 4px;
-            }
+            .mbhudf-town .star { color: #ffb020; font-size: 12px; width: 12px; text-align: center; flex-shrink: 0; }
+            .mbhudf-town .name { color: #e8f0ff; font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .mbhudf-town .res { color: #6a7a8a; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+            .mbhudf-town .res .pend { color: #a78bfa; margin-left: 3px; }
+            .mbhudf-pill { padding: 3px 9px; border-radius: 12px; font-size: 8px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; border: 1px solid; white-space: nowrap; flex-shrink: 0; }
+            .mbhudf-pill.ready { background: rgba(0,255,136,0.12); border-color: rgba(0,255,136,0.5); color: #00ff88; }
+            .mbhudf-pill.active { background: rgba(34,211,238,0.14); border-color: rgba(34,211,238,0.55); color: #22d3ee; animation: mbhudf-pulse 2s ease-in-out infinite; }
+            .mbhudf-pill.waiting { background: rgba(255,176,32,0.10); border-color: rgba(255,176,32,0.45); color: #ffb020; }
+            .mbhudf-led { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.08); }
+            .mbhudf-led.ready { background: #00ff88; box-shadow: 0 0 8px #00ff88; animation: mbhudf-pulse 2s ease-in-out infinite; }
+            .mbhudf-led.active { background: #22d3ee; box-shadow: 0 0 8px #22d3ee; animation: mbhudf-pulse 1.4s ease-in-out infinite; }
+            .mbhudf-led.waiting { background: #ffb020; box-shadow: 0 0 8px #ffb020; animation: mbhudf-pulse 1.8s ease-in-out infinite; }
+            .mbhudf-log { font-size: 10px; line-height: 1.7; max-height: 120px; overflow-y: auto; background: rgba(0,0,0,0.35); border: 1px solid rgba(34,211,238,0.12); border-radius: 4px; padding: 6px 8px; }
             .mbhudf-log .ln { display: flex; gap: 6px; }
-            .mbhudf-log .ts {
-                color: #4a5a6a;
-                font-variant-numeric: tabular-nums;
-                flex-shrink: 0;
-            }
+            .mbhudf-log .ts { color: #4a5a6a; font-variant-numeric: tabular-nums; flex-shrink: 0; }
             .mbhudf-log .msg { flex: 1; word-break: break-word; }
-            .mbhudf-log .ln.info  .msg { color: #a8b8d0; }
-            .mbhudf-log .ln.ok    .msg { color: #00ff88; text-shadow: 0 0 6px rgba(0,255,136,0.3); }
-            .mbhudf-log .ln.warn  .msg { color: #ffb020; text-shadow: 0 0 6px rgba(255,176,32,0.3); }
-            .mbhudf-log .ln.error .msg { color: #f87171; text-shadow: 0 0 6px rgba(248,113,113,0.3); }
-
-            .mbhudf-empty {
-                text-align: center;
-                color: #4a5a6a;
-                font-size: 10px;
-                padding: 12px 8px;
-                letter-spacing: 0.4px;
-                font-style: italic;
-            }
+            .mbhudf-log .ln.info .msg { color: #a8b8d0; }
+            .mbhudf-log .ln.ok .msg { color: #00ff88; }
+            .mbhudf-log .ln.warn .msg { color: #ffb020; }
+            .mbhudf-log .ln.error .msg { color: #f87171; }
+            .mbhudf-empty { text-align: center; color: #4a5a6a; font-size: 10px; padding: 12px 8px; font-style: italic; }
         `;
         uw.$('<style id="mbhud-festival-styles">').text(css).appendTo('head');
     }
 
-    // ══════════════════════════════════════════════════
-    //  UI
-    // ══════════════════════════════════════════════════
     settings = () => {
         this._injectStyles();
         requestAnimationFrame(() => this._refreshUI());
@@ -357,28 +95,25 @@ var AutoFestival = class extends MultUtil {
             '<div class="mbhudf-root">' +
                 '<div class="mbhudf-header">' +
                     '<h2>◆ FESTIVAL ENGINE ◆</h2>' +
-                    '<div class="sub">AUTO-RESOURCE TRANSFER · <span class="live" id="ff-live-sync">--:--:--</span></div>' +
+                    '<div class="sub">PRIORIDADE ÚNICA · <span class="live" id="ff-live-sync">--:--:--</span></div>' +
                 '</div>' +
-
                 '<div class="mbhudf-section">' +
-                    '<span class="mbhudf-label">Protocolo</span>' +
+                    '<span class="mbhudf-label">Protocolo de Prioridade</span>' +
                     '<div class="mbhudf-desc">' +
-                        'Cidades com <b>ACADEMIA ≥ 30</b>. Envio automático de <b>500 fixos</b> de cada recurso ' +
-                        'para a primeira que precisa, priorizando as <b>SEM FESTIVAL</b>. Pendentes rastreados. Alvo: ' +
-                        '<b>🪵 15k · 🪨 18k · ⚙ 15k</b>. Auto-stop quando não há mais cidades.' +
+                        '1. Seleciona a <b>1ª cidade</b> sem festival e sem recursos.<br>' +
+                        '2. <b>Todas as doadoras</b> enviam até <b>500 fixos</b> de cada recurso para essa cidade.<br>' +
+                        '3. Só avança para a 2ª cidade quando a 1ª atingir <b>🪵15k · 🪨18k · ⚙15k</b>.<br>' +
+                        '4. Filtra automaticamente cidades sem capacidade de comércio para evitar falhas.' +
                     '</div>' +
                 '</div>' +
-
                 '<div class="mbhudf-section">' +
                     '<span class="mbhudf-label">Telemetria</span>' +
                     '<div class="mbhudf-stats" id="ff_status">' + this._buildStatusHtml() + '</div>' +
                 '</div>' +
-
                 '<div class="mbhudf-section">' +
                     '<span class="mbhudf-label">Cidades Elegíveis</span>' +
                     '<div class="mbhudf-townlist" id="ff_town_list">' + this._buildTownListHtml() + '</div>' +
                 '</div>' +
-
                 '<div class="mbhudf-section">' +
                     '<span class="mbhudf-label">Registo de Operações</span>' +
                     '<div class="mbhudf-log" id="ff_log">' + this._buildLogHtml() + '</div>' +
@@ -388,20 +123,17 @@ var AutoFestival = class extends MultUtil {
         );
     };
 
-    toggle = () => {
-        if (this._active) this.stop();
-        else this.start();
-    };
+    toggle = () => { if (this._active) this.stop(); else this.start(); };
 
     start() {
         if (this._active) return;
         this._active = true;
         this.storage.save(this.STORAGE_KEY_ACTIVE, true);
-        this._log('🎉 Iniciado. A enviar 500 fixos de cada recurso para cidades que precisam...');
+        this._log('🎉 Iniciado. Modo de prioridade única ativado.', 'ok');
         this._refreshUI();
         this._main();
         this._intervalId = setInterval(() => {
-            this._main().catch(e => this._log(`Erro ciclo: ${e?.message ?? e}`));
+            this._main().catch(e => this._log(`Erro ciclo: ${e?.message ?? e}`, 'error'));
         }, this.CONFIG.intervalMs);
     }
 
@@ -410,7 +142,7 @@ var AutoFestival = class extends MultUtil {
         this._active = false;
         this.storage.save(this.STORAGE_KEY_ACTIVE, false);
         if (this._intervalId) { clearInterval(this._intervalId); this._intervalId = null; }
-        this._log('Parado.');
+        this._log('Parado.', 'warn');
         this._refreshUI();
     }
 
@@ -418,37 +150,22 @@ var AutoFestival = class extends MultUtil {
         requestAnimationFrame(() => {
             const filter = this._active ? 'brightness(100%) saturate(186%) hue-rotate(241deg)' : '';
             try { uw.$('#ff_title').css('filter', filter); } catch (e) {}
-
             const now = new Date();
-            const hh = String(now.getHours()).padStart(2, '0');
-            const mm = String(now.getMinutes()).padStart(2, '0');
-            const ss = String(now.getSeconds()).padStart(2, '0');
-            try { uw.$('#ff-live-sync').text(`${hh}:${mm}:${ss}`); } catch (e) {}
-
-            const $status = uw.$('#ff_status');
-            if ($status.length) $status.html(this._buildStatusHtml());
-
-            const $list = uw.$('#ff_town_list');
-            if ($list.length) $list.html(this._buildTownListHtml());
-
-            const $log = uw.$('#ff_log');
-            if ($log.length) $log.html(this._buildLogHtml());
+            try { uw.$('#ff-live-sync').text(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`); } catch (e) {}
+            const $status = uw.$('#ff_status'); if ($status.length) $status.html(this._buildStatusHtml());
+            const $list = uw.$('#ff_town_list'); if ($list.length) $list.html(this._buildTownListHtml());
+            const $log = uw.$('#ff_log'); if ($log.length) $log.html(this._buildLogHtml());
         });
     }
 
     _log(message, level = 'info') {
         try { this.console.log(`${this.PREFIX} ${message}`); } catch (e) {}
-
         try {
             const logs = this.storage.load(this.STORAGE_KEY_LOGS, []);
             logs.unshift({ at: Date.now(), level, message });
             this.storage.save(this.STORAGE_KEY_LOGS, logs.slice(0, this.CONFIG.logLimit));
         } catch (e) {}
-
-        try {
-            const $log = uw.$('#ff_log');
-            if ($log.length) $log.html(this._buildLogHtml());
-        } catch (e) {}
+        try { const $log = uw.$('#ff_log'); if ($log.length) $log.html(this._buildLogHtml()); } catch (e) {}
     }
 
     _buildLogHtml() {
@@ -457,9 +174,8 @@ var AutoFestival = class extends MultUtil {
         return logs.map(e => {
             const d = new Date(e.at);
             const ts = ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
-            const level = e.level || 'info';
             const msg = String(e.message).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-            return `<div class="ln ${level}"><span class="ts">${ts}</span><span class="msg">${msg}</span></div>`;
+            return `<div class="ln ${e.level || 'info'}"><span class="ts">${ts}</span><span class="msg">${msg}</span></div>`;
         }).join('');
     }
 
@@ -470,92 +186,45 @@ var AutoFestival = class extends MultUtil {
         const ready = towns.filter(t => !this._hasActiveFestival(t.id) && this._hasEnoughResources(t.id)).length;
         const waiting = towns.filter(t => !this._hasActiveFestival(t.id) && !this._hasEnoughResources(t.id)).length;
         const pending = this._loadPending();
-        const pendingCount = Object.keys(pending).filter(tid =>
-            this._canDoFestival(tid) && !this._hasActiveFestival(tid)
-        ).length;
-
-        const mk = (val, label, cls) =>
-            `<div class="mbhudf-stat ${cls}"><div class="n">${val}</div><div class="t">${label}</div></div>`;
-
-        return (
-            mk(total, 'Elegíveis', 'on') +
-            mk(active, 'Com Festival', 'info') +
-            mk(ready, 'Prontas', 'on') +
-            mk(waiting, 'Aguardar', 'warn') +
-            mk(pendingCount, 'Pendentes', 'pend')
-        );
+        const pendingCount = Object.keys(pending).filter(tid => this._canDoFestival(tid) && !this._hasActiveFestival(tid)).length;
+        const mk = (val, label, cls) => `<div class="mbhudf-stat ${cls}"><div class="n">${val}</div><div class="t">${label}</div></div>`;
+        return mk(total, 'Elegíveis', 'on') + mk(active, 'Com Festival', 'info') + mk(ready, 'Prontas', 'on') + mk(waiting, 'Aguardar', 'warn') + mk(pendingCount, 'Pendentes', 'pend');
     }
 
     _buildTownListHtml() {
         const towns = this._scanTowns();
-        if (!towns.length) {
-            return '<div class="mbhudf-empty">// nenhuma cidade com academia ≥ 30 //</div>';
-        }
-
+        if (!towns.length) return '<div class="mbhudf-empty">// nenhuma cidade com academia ≥ 30 //</div>';
         const pendingAll = this._loadPending();
-
         return towns.map(t => {
             const tid = t.id;
             const hasActive = this._hasActiveFestival(tid);
             const totalRes = this._getTotalResources(tid);
             const currentRes = this._getResources(tid);
             const pending = pendingAll[tid];
-
-            const hasResources = totalRes && totalRes.wood >= this.CONFIG.cost.wood &&
-                                 totalRes.stone >= this.CONFIG.cost.stone &&
-                                 totalRes.iron >= this.CONFIG.cost.iron;
-
-            let statusKey, statusText;
-            if (hasActive)          { statusKey = 'active';  statusText = '🎉 Ativo'; }
-            else if (hasResources)  { statusKey = 'ready';   statusText = '✅ Pronto'; }
-            else                    { statusKey = 'waiting'; statusText = '⏳ Precisa'; }
-
-            const resText = currentRes
-                ? `🪵${Math.floor(currentRes.wood)} 🪨${Math.floor(currentRes.stone)} ⚙${Math.floor(currentRes.iron)}`
-                : '—';
-            const pendingText = pending
-                ? `<span class="pend">+${Math.floor(pending.wood)}/${Math.floor(pending.stone)}/${Math.floor(pending.iron)}</span>`
-                : '';
+            const hasResources = totalRes && totalRes.wood >= this.CONFIG.cost.wood && totalRes.stone >= this.CONFIG.cost.stone && totalRes.iron >= this.CONFIG.cost.iron;
+            let statusKey = hasActive ? 'active' : (hasResources ? 'ready' : 'waiting');
+            let statusText = hasActive ? '🎉 Ativo' : (hasResources ? '✅ Pronto' : '⏳ Precisa');
+            const resText = currentRes ? `🪵${Math.floor(currentRes.wood)} 🪨${Math.floor(currentRes.stone)} ⚙${Math.floor(currentRes.iron)}` : '—';
+            const pendingText = pending ? `<span class="pend">+${Math.floor(pending.wood)}/${Math.floor(pending.stone)}/${Math.floor(pending.iron)}</span>` : '';
             const star = (!hasActive && !hasResources) ? '⭐' : '';
             const safe = String(t.name).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-
-            return '<div class="mbhudf-town">' +
-                `<span class="star">${star}</span>` +
-                `<span class="mbhudf-led ${statusKey}"></span>` +
-                `<span class="name">${safe}</span>` +
-                `<span class="res">${resText}${pendingText}</span>` +
-                `<span class="mbhudf-pill ${statusKey}">${statusText}</span>` +
-                '</div>';
+            return `<div class="mbhudf-town"><span class="star">${star}</span><span class="mbhudf-led ${statusKey}"></span><span class="name">${safe}</span><span class="res">${resText}${pendingText}</span><span class="mbhudf-pill ${statusKey}">${statusText}</span></div>`;
         }).join('');
     }
-
-    // ══════════════════════════════════════════════════
-    //  PERSISTÊNCIA
-    // ══════════════════════════════════════════════════
 
     _loadPending() { return this.storage.load(this.STORAGE_KEY_PENDING, {}); }
     _savePending(p) { this.storage.save(this.STORAGE_KEY_PENDING, p); }
 
-    // ══════════════════════════════════════════════════
-    //  GREPOLIS HELPERS
-    // ══════════════════════════════════════════════════
-
     _getAllTowns() {
         try {
-            const models = uw.MM.getOnlyCollectionByName('Town').models;
-            return models.map(m => ({
-                id: String(m.attributes.id),
-                name: m.attributes.name || ('Cidade ' + m.attributes.id),
-            }));
+            return uw.MM.getOnlyCollectionByName('Town').models.map(m => ({ id: String(m.attributes.id), name: m.attributes.name || ('Cidade ' + m.attributes.id) }));
         } catch (e) { return []; }
     }
 
     _canDoFestival(tid) {
         try {
             const town = uw.ITowns.towns[tid];
-            if (!town) return false;
-            const buildings = town.getBuildings().attributes;
-            return Boolean(buildings.academy && buildings.academy >= this.CONFIG.academyMinLevel);
+            return Boolean(town && town.getBuildings().attributes.academy >= this.CONFIG.academyMinLevel);
         } catch (e) { return false; }
     }
 
@@ -584,25 +253,19 @@ var AutoFestival = class extends MultUtil {
         const current = this._getResources(tid);
         if (!current) return null;
         const pending = this._loadPending()[tid] || { wood: 0, stone: 0, iron: 0 };
-        return {
-            wood: current.wood + pending.wood,
-            stone: current.stone + pending.stone,
-            iron: current.iron + pending.iron,
-        };
+        return { wood: current.wood + pending.wood, stone: current.stone + pending.stone, iron: current.iron + pending.iron };
     }
 
     _hasEnoughResources(tid) {
         const t = this._getTotalResources(tid);
         if (!t) return false;
-        const c = this.CONFIG.cost;
-        return t.wood >= c.wood && t.stone >= c.stone && t.iron >= c.iron;
+        return t.wood >= this.CONFIG.cost.wood && t.stone >= this.CONFIG.cost.stone && t.iron >= this.CONFIG.cost.iron;
     }
 
     _checkAndClearPending(tid) {
         const current = this._getResources(tid);
         if (!current) return false;
-        const c = this.CONFIG.cost;
-        if (current.wood >= c.wood && current.stone >= c.stone && current.iron >= c.iron) {
+        if (current.wood >= this.CONFIG.cost.wood && current.stone >= this.CONFIG.cost.stone && current.iron >= this.CONFIG.cost.iron) {
             const pending = this._loadPending();
             if (pending[tid]) {
                 this._log('✓ ' + this.getTownName(tid) + ' recebeu tudo. Pendências limpas.', 'ok');
@@ -628,17 +291,13 @@ var AutoFestival = class extends MultUtil {
         if (dirty) this._savePending(pending);
     }
 
-    // ══════════════════════════════════════════════════
-    //  TRIAGEM / ORDENAÇÃO
-    // ══════════════════════════════════════════════════
-
     _anyCityNeedsResources() {
         const all = this._getAllTowns();
         for (const t of all) {
             if (!this._canDoFestival(t.id)) continue;
             if (this._hasActiveFestival(t.id)) continue;
             if (this._hasEnoughResources(t.id)) continue;
-            return true;
+            return true; // Encontrou pelo menos uma que precisa
         }
         return false;
     }
@@ -647,7 +306,7 @@ var AutoFestival = class extends MultUtil {
         this._cleanPending();
         const all = this._getAllTowns();
         const eligible = all.filter(t => this._canDoFestival(t.id));
-
+        // ORDENAÇÃO CRÍTICA: Prioriza as que NÃO têm festival e NÃO têm recursos
         eligible.sort((a, b) => {
             const aScore = this._hasActiveFestival(a.id) ? 2 : (this._hasEnoughResources(a.id) ? 1 : 0);
             const bScore = this._hasActiveFestival(b.id) ? 2 : (this._hasEnoughResources(b.id) ? 1 : 0);
@@ -661,18 +320,14 @@ var AutoFestival = class extends MultUtil {
         const towns = this._scanTowns();
         const pending = this._loadPending();
         let dirty = false;
-
         for (const t of towns) {
             const tid = t.id;
-            if (this._hasActiveFestival(tid)) {
-                if (pending[tid]) { delete pending[tid]; dirty = true; }
-                continue;
-            }
+            if (this._hasActiveFestival(tid)) { if (pending[tid]) { delete pending[tid]; dirty = true; } continue; }
             if (this._checkAndClearPending(tid)) continue;
-            if (this._hasEnoughResources(tid)) continue;
+            if (this._hasEnoughResources(tid)) continue; // Se já tem, pula para a próxima
             if (this._sendingQueue[tid]) continue;
             if (dirty) this._savePending(pending);
-            return tid;
+            return tid; // RETORNA A PRIMEIRA QUE PRECISA (PRIORIDADE MÁXIMA)
         }
         if (dirty) this._savePending(pending);
         return null;
@@ -685,22 +340,25 @@ var AutoFestival = class extends MultUtil {
             const tid = t.id;
             if (tid === targetId) continue;
             if (this._hasActiveFestival(tid)) continue;
-            if (this._canDoFestival(tid) && !this._hasEnoughResources(tid)) continue;
+            if (this._canDoFestival(tid) && !this._hasEnoughResources(tid)) continue; // Não tirar de quem também precisa
 
             const res = this._getResources(tid);
             if (!res) continue;
-            // Doador precisa ter pelo menos 500 de algum recurso
-            if (res.wood < this.CONFIG.donorMinResource &&
-                res.stone < this.CONFIG.donorMinResource &&
-                res.iron < this.CONFIG.donorMinResource) continue;
+
+            // FILTRO ANTI-FALHA: Só considera se tiver pelo menos 100 de algum recurso
+            if (res.wood < this.CONFIG.donorMinResource && res.stone < this.CONFIG.donorMinResource && res.iron < this.CONFIG.donorMinResource) continue;
+
+            // FILTRO DE CAPACIDADE: Evita falhas por comerciantes ocupados
+            try {
+                const town = uw.ITowns.towns[tid];
+                const cap = town.getAvailableTradeCapacity ? town.getAvailableTradeCapacity() : 99999;
+                if (cap < 100) continue; // Precisa de pelo menos 1 comerciante livre
+            } catch(e) {}
+
             donors.push(tid);
         }
         return donors;
     }
-
-    // ══════════════════════════════════════════════════
-    //  AJAX
-    // ══════════════════════════════════════════════════
 
     _sendResources(fromTownId, toTownId, amount) {
         return new Promise(resolve => {
@@ -725,22 +383,16 @@ var AutoFestival = class extends MultUtil {
         });
     }
 
-    // ══════════════════════════════════════════════════
-    //  MAIN
-    // ══════════════════════════════════════════════════
-
     async _main() {
         if (!this._active) return;
         if (uw.$('.botcheck').length || uw.$('#recaptcha_window').length) return;
 
         try {
-            // 1) Limpa pendências em todas as cidades
             const allTowns = this._getAllTowns();
             for (const t of allTowns) this._checkAndClearPending(t.id);
 
-            // 2) Verifica se ainda há cidades precisando
             if (!this._anyCityNeedsResources()) {
-                this._log('🎉 Todas as cidades elegíveis têm festival ativo ou recursos suficientes. A parar.', 'ok');
+                this._log('✅ Todas as cidades elegíveis têm festival ativo ou recursos suficientes. Auto-parado.', 'ok');
                 this._refreshUI();
                 this.stop();
                 return;
@@ -748,12 +400,14 @@ var AutoFestival = class extends MultUtil {
 
             const targetId = this._getTargetTown();
             if (!targetId) {
-                this._log('Nenhuma cidade precisa de recursos neste momento.');
+                this._log('Aguardando cidades ficarem elegíveis...', 'info');
                 this._refreshUI();
                 return;
             }
 
             const targetName = this.getTownName(targetId);
+            this._log(`🎯 FOCO: ${targetName}. A concentrar recursos até atingir a meta...`, 'info');
+
             const totalRes = this._getTotalResources(targetId);
             const deficit = {
                 wood: Math.max(0, this.CONFIG.cost.wood - totalRes.wood),
@@ -763,7 +417,7 @@ var AutoFestival = class extends MultUtil {
             let totalDeficit = deficit.wood + deficit.stone + deficit.iron;
 
             if (totalDeficit <= 0) {
-                this._log(targetName + ' já tem recursos suficientes.', 'ok');
+                this._log(`🎯 ${targetName} já atingiu a meta!`, 'ok');
                 const pending = this._loadPending();
                 if (pending[targetId]) { delete pending[targetId]; this._savePending(pending); }
                 this._refreshUI();
@@ -771,15 +425,16 @@ var AutoFestival = class extends MultUtil {
             }
 
             this._sendingQueue[targetId] = true;
-
             const donors = this._getDonorTowns(targetId);
+            
             if (!donors.length) {
-                this._log('Sem cidades com recursos para enviar para ' + targetName, 'error');
+                this._log(`⚠ Sem doadores válidos para ${targetName} (verifica comerciantes/recursos).`, 'warn');
                 delete this._sendingQueue[targetId];
                 this._refreshUI();
                 return;
             }
 
+            // Baralha doadores para não sobrecarregar sempre a mesma cidade
             donors.sort(() => Math.random() - 0.5);
 
             let sent = false;
@@ -791,7 +446,7 @@ var AutoFestival = class extends MultUtil {
                 const donorRes = this._getResources(donorId);
                 if (!donorRes) continue;
 
-                // Recalcula déficit
+                // Recalcula déficit em tempo real
                 const currentTotal = this._getTotalResources(targetId);
                 deficit.wood = Math.max(0, this.CONFIG.cost.wood - currentTotal.wood);
                 deficit.stone = Math.max(0, this.CONFIG.cost.stone - currentTotal.stone);
@@ -799,13 +454,12 @@ var AutoFestival = class extends MultUtil {
                 totalDeficit = deficit.wood + deficit.stone + deficit.iron;
                 if (totalDeficit <= 0) break;
 
-                // ⬇️⬇️⬇️ MUDANÇA PRINCIPAL: Envia 500 fixos de cada recurso ⬇️⬇️⬇️
+                // LÓGICA DE 500 FIXOS: Envia até 500, mas nunca mais do que o déficit ou o que o doador tem
                 const sendAmount = {
                     wood: Math.min(this.CONFIG.donorFixedAmount, deficit.wood, donorRes.wood),
                     stone: Math.min(this.CONFIG.donorFixedAmount, deficit.stone, donorRes.stone),
                     iron: Math.min(this.CONFIG.donorFixedAmount, deficit.iron, donorRes.iron),
                 };
-                // ⬆️⬆️⬆️ FIM DA MUDANÇA ⬆️⬆️⬆️
 
                 const totalSend = sendAmount.wood + sendAmount.stone + sendAmount.iron;
                 if (totalSend < this.CONFIG.minSendTotal) continue;
@@ -813,9 +467,7 @@ var AutoFestival = class extends MultUtil {
                 const ok = await this._sendResources(donorId, targetId, sendAmount);
                 if (ok) {
                     const pending = this._loadPending();
-                    if (!pending[targetId]) {
-                        pending[targetId] = { wood: 0, stone: 0, iron: 0, timestamp: Date.now() };
-                    }
+                    if (!pending[targetId]) pending[targetId] = { wood: 0, stone: 0, iron: 0, timestamp: Date.now() };
                     pending[targetId].wood += sendAmount.wood;
                     pending[targetId].stone += sendAmount.stone;
                     pending[targetId].iron += sendAmount.iron;
@@ -828,21 +480,18 @@ var AutoFestival = class extends MultUtil {
 
                     this._log(`✓ ${this.getTownName(donorId)} → ${targetName} | 🪵${sendAmount.wood} 🪨${sendAmount.stone} ⚙${sendAmount.iron}`, 'ok');
                     sent = true;
-
                     await this._randomDelay(800, 400);
                 } else {
-                    this._log('✗ Falha ao enviar de ' + this.getTownName(donorId), 'error');
+                    // Falha silenciosa para não encher o log, já que filtramos os óbvios
+                    // this._log('✗ Falha ao enviar de ' + this.getTownName(donorId), 'error');
                 }
             }
 
-            // Verifica resultado final
             const finalTotal = this._getTotalResources(targetId);
-            if (finalTotal && finalTotal.wood >= this.CONFIG.cost.wood &&
-                finalTotal.stone >= this.CONFIG.cost.stone &&
-                finalTotal.iron >= this.CONFIG.cost.iron) {
-                this._log('🎯 ' + targetName + ' tem recursos suficientes! A aguardar chegada.', 'ok');
+            if (finalTotal && finalTotal.wood >= this.CONFIG.cost.wood && finalTotal.stone >= this.CONFIG.cost.stone && finalTotal.iron >= this.CONFIG.cost.iron) {
+                this._log(`🎉 META ATINGIDA em ${targetName}! A preparar festival...`, 'ok');
             } else if (sent) {
-                this._log(`📦 Enviados para ${targetName}: 🪵${totalSent.wood} 🪨${totalSent.stone} ⚙${totalSent.iron}`);
+                this._log(`📦 Enviados para ${targetName}: 🪵${totalSent.wood} 🪨${totalSent.stone} ⚙${totalSent.iron}`, 'info');
             }
 
             delete this._sendingQueue[targetId];
