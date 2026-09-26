@@ -1,8 +1,6 @@
+
 // ══════════════════════════════════════════════════════
-//  MODULE: AutoFestival v1.2.0 (Fixed Bulk Send)
-//  Porta o "Auto Festival de Recursos" para o MultBot.
-//  
-//  CONFIGURAÇÃO DE ENVIO: 500 recursos por vez.
+//  MODULE: AutoFestival v1.2.0 (Cyberpunk Edition - Fixed)
 // ══════════════════════════════════════════════════════
 var AutoFestival = class extends MultUtil {
     VERSION = '1.2.0';
@@ -12,8 +10,8 @@ var AutoFestival = class extends MultUtil {
         cost: { wood: 15000, stone: 18000, iron: 15000 },
         intervalMs: 30000,
         pendingTimeoutMs: 120000,
-        donorMinResource: 500, 
-        fixedSendAmount: 500,  // Quantidade fixa de envio
+        donorMinResource: 500,
+        fixedSendAmount: 500, // O valor que tu queres!
         minSendTotal: 100,
         logLimit: 80,
         academyMinLevel: 30,
@@ -38,19 +36,28 @@ var AutoFestival = class extends MultUtil {
         if (uw.$('#mbhud-festival-styles').length) return;
         const css = `
             @keyframes mbhudf-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(1.25); } }
-            .mbhudf-root { background: #060816; border: 1px solid #22d3ee; border-radius: 6px; padding: 12px; color: #a8b8d0; font-family: monospace; margin-bottom: 20px; }
-            .mbhudf-header { text-align: center; border-bottom: 1px solid rgba(34,211,238,0.2); margin-bottom: 12px; padding-bottom: 5px; }
-            .mbhudf-header h2 { font-size: 14px; color: #22d3ee; margin: 0; }
-            .mbhudf-section { background: rgba(0,0,0,0.2); border-radius: 4px; padding: 8px; margin-bottom: 10px; }
-            .mbhudf-label { font-size: 9px; color: #22d3ee; text-transform: uppercase; margin-bottom: 5px; display: block; }
-            .mbhudf-townlist { max-height: 150px; overflow-y: auto; font-size: 11px; }
-            .mbhudf-town { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
-            .mbhudf-log { font-size: 10px; max-height: 100px; overflow-y: auto; color: #8899aa; }
-            .mbhudf-log .ln { margin-bottom: 2px; }
-            .mbhudf-log .ts { color: #445566; margin-right: 5px; }
+            @keyframes mbhudf-scan { 0% { background-position: 200% 0%; } 100% { background-position: -200% 0%; } }
+            @keyframes mbhudf-fade { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+            .mbhudf-root { background: linear-gradient(135deg, #060816 0%, #0a1020 50%, #060816 100%); border: 1px solid rgba(34,211,238,0.35); border-radius: 6px; padding: 12px; font-family: 'SF Mono','Consolas',monospace; color: #a8b8d0; box-shadow: 0 0 24px rgba(34,211,238,0.15); position: relative; overflow: hidden; animation: mbhudf-fade 0.35s ease; margin-bottom: 20px; }
+            .mbhudf-root::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, #22d3ee, transparent); background-size: 200% 100%; animation: mbhudf-scan 3.5s linear infinite; pointer-events: none; }
+            .mbhudf-header { text-align: center; padding: 4px 0 12px; border-bottom: 1px solid rgba(34,211,238,0.2); margin-bottom: 12px; position: relative; z-index: 1; }
+            .mbhudf-header h2 { margin: 0; font-size: 14px; letter-spacing: 6px; text-transform: uppercase; color: #22d3ee; text-shadow: 0 0 12px rgba(34,211,238,0.7); font-weight: 700; }
+            .mbhudf-section { background: rgba(10,16,32,0.6); border: 1px solid rgba(34,211,238,0.2); border-radius: 4px; padding: 10px 12px; margin-bottom: 10px; position: relative; z-index: 1; }
+            .mbhudf-label { display: block; font-size: 9px; letter-spacing: 2.5px; text-transform: uppercase; color: #22d3ee; margin-bottom: 8px; font-weight: 700; }
+            .mbhudf-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 6px; }
+            .mbhudf-stat { background: rgba(0,0,0,0.35); border: 1px solid rgba(34,211,238,0.18); border-radius: 4px; padding: 6px 8px; text-align: center; }
+            .mbhudf-stat .n { font-size: 18px; font-weight: 700; color: #22d3ee; }
+            .mbhudf-stat .t { font-size: 8px; color: #5a6a7a; text-transform: uppercase; margin-top: 2px; }
+            .mbhudf-townlist { max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.25); border: 1px solid rgba(34,211,238,0.12); padding: 2px; }
+            .mbhudf-town { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid rgba(34,211,238,0.08); font-size: 11px; }
+            .mbhudf-pill { padding: 3px 9px; border-radius: 12px; font-size: 8px; font-weight: 700; text-transform: uppercase; border: 1px solid; }
+            .mbhudf-pill.ready { background: rgba(0,255,136,0.12); border-color: rgba(0,255,136,0.5); color: #00ff88; }
+            .mbhudf-pill.active { background: rgba(34,211,238,0.14); border-color: rgba(34,211,238,0.55); color: #22d3ee; animation: mbhudf-pulse 2s infinite; }
+            .mbhudf-log { font-size: 10px; max-height: 120px; overflow-y: auto; background: rgba(0,0,0,0.35); padding: 6px 8px; }
+            .mbhudf-log .ln { display: flex; gap: 6px; margin-bottom: 2px; }
+            .mbhudf-log .ts { color: #4a5a6a; flex-shrink: 0; }
             .mbhudf-log .ok { color: #00ff88; }
-            .mbhudf-log .error { color: #ff7777; }
-            .mbhudf-log .warn { color: #ffb020; }
+            .mbhudf-log .error { color: #f87171; }
         `;
         uw.$('<style id="mbhud-festival-styles">').text(css).appendTo('head');
     }
@@ -59,16 +66,14 @@ var AutoFestival = class extends MultUtil {
         this._injectStyles();
         return '<div class="mbhudf-root">' +
                '<div class="mbhudf-header"><h2>◆ FESTIVAL ENGINE ◆</h2></div>' +
-               '<div class="mbhudf-section"><span class="mbhudf-label">Status</span><div id="ff_status">Carregando...</div></div>' +
-               '<div class="mbhudf-section"><span class="mbhudf-label">Cidades</span><div class="mbhudf-townlist" id="ff_town_list"></div></div>' +
-               '<div class="mbhudf-section"><span class="mbhudf-label">Logs</span><div class="mbhudf-log" id="ff_log"></div></div>' +
+               '<div class="mbhudf-section"><span class="mbhudf-label">Protocolo</span><div class="mbhudf-desc" style="font-size:10px; color:#6a7a8a;">Alvo: 🪵15k 🪨18k ⚙15k. Envio Lote: 500.</div></div>' +
+               '<div class="mbhudf-section"><span class="mbhudf-label">Telemetria</span><div class="mbhudf-stats" id="ff_status"></div></div>' +
+               '<div class="mbhudf-section"><span class="mbhudf-label">Cidades Elegíveis</span><div class="mbhudf-townlist" id="ff_town_list"></div></div>' +
+               '<div class="mbhudf-section"><span class="mbhudf-label">Registo</span><div class="mbhudf-log" id="ff_log"></div></div>' +
                '</div>';
     };
 
-    toggle = () => {
-        if (this._active) this.stop();
-        else this.start();
-    };
+    toggle = () => { this._active ? this.stop() : this.start(); };
 
     start() {
         if (this._active) return;
@@ -76,9 +81,7 @@ var AutoFestival = class extends MultUtil {
         this.storage.save(this.STORAGE_KEY_ACTIVE, true);
         this._log('🎉 Iniciado.', 'ok');
         this._main();
-        this._intervalId = setInterval(() => {
-            this._main().catch(e => this._log(`Erro: ${e}`, 'error'));
-        }, this.CONFIG.intervalMs);
+        this._intervalId = setInterval(() => this._main(), this.CONFIG.intervalMs);
     }
 
     stop() {
@@ -102,13 +105,14 @@ var AutoFestival = class extends MultUtil {
     }
 
     _buildStatusHtml() {
-        return `<div>Ativo: ${this._active ? '<span style="color:#00ff88">SIM</span>' : '<span style="color:#ff7777">NÃO</span>'}</div>`;
+        const towns = this._scanTowns();
+        return `<div class="mbhudf-stat"><div class="n">${towns.length}</div><div class="t">Elegíveis</div></div>`;
     }
 
     _buildTownListHtml() {
         const towns = this._scanTowns();
-        if (!towns.length) return '<div>Nenhuma cidade elegível.</div>';
-        return towns.map(t => `<div class="mbhudf-town"><span>${t.name}</span><span>${this._hasActiveFestival(t.id) ? '🎉' : '⏳'}</span></div>`).join('');
+        if (!towns.length) return '<div style="font-size:10px;">Nenhuma cidade.</div>';
+        return towns.map(t => `<div class="mbhudf-town"><span>${t.name}</span><span class="mbhudf-pill ready">Monitor</span></div>`).join('');
     }
 
     _buildLogHtml() {
@@ -116,75 +120,61 @@ var AutoFestival = class extends MultUtil {
         return logs.map(e => {
             const d = new Date(e.at);
             const ts = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
-            return `<div class="ln ${e.level}"><span class="ts">${ts}</span>${e.message}</div>`;
+            return `<div class="ln ${e.level}"><span class="ts">${ts}</span><span>${e.message}</span></div>`;
         }).join('');
     }
 
-    // --- LOGICA DE NEGOCIO ---
+    // --- LOGICA DE ENVIO CORRIGIDA ---
 
-    _getAllTowns() {
+    async _main() {
+        if (!this._active) return;
         try {
-            return uw.MM.getOnlyCollectionByName('Town').models.map(m => ({
-                id: String(m.attributes.id),
-                name: m.attributes.name || ('Cidade ' + m.attributes.id),
-            }));
-        } catch (e) { return []; }
-    }
-
-    _canDoFestival(tid) {
-        try {
-            const town = uw.ITowns.towns[tid];
-            if (!town) return false;
-            const buildings = town.getBuildings().attributes;
-            return Boolean(buildings.academy && buildings.academy >= this.CONFIG.academyMinLevel);
-        } catch (e) { return false; }
-    }
-
-    _hasActiveFestival(tid) {
-        try {
-            const celebrations = uw.MM.getModels().Celebration;
-            if (!celebrations) return false;
-            for (const k in celebrations) {
-                const c = celebrations[k].attributes;
-                if (c.celebration_type === 'party' && String(c.town_id) === String(tid)) return true;
+            const targetId = this._getTargetTown();
+            if (!targetId) {
+                this._log('Nenhuma cidade precisa de recursos.', 'info');
+                return;
             }
-            return false;
-        } catch (e) { return false; }
-    }
 
-    _getResources(tid) {
-        try {
-            const town = uw.ITowns.towns[tid];
-            if (!town) return null;
-            const r = town.resources();
-            return { wood: r.wood || 0, stone: r.stone || 0, iron: r.iron || 0 };
-        } catch (e) { return null; }
-    }
+            const targetName = this.getTownName(targetId);
+            const donors = this._getDonorTowns(targetId);
 
-    _getTotalResources(tid) {
-        const current = this._getResources(tid);
-        if (!current) return null;
-        const pending = this._loadPending()[tid] || { wood: 0, stone: 0, iron: 0 };
-        return {
-            wood: current.wood + pending.wood,
-            stone: current.stone + pending.stone,
-            iron: current.iron + pending.iron,
-        };
-    }
+            if (!donors.length) {
+                this._log('Sem doadores para ' + targetName, 'error');
+                return;
+            }
 
-    _hasEnoughResources(tid) {
-        const t = this._getTotalResources(tid);
-        if (!t) return false;
-        const c = this.CONFIG.cost;
-        return t.wood >= c.wood && t.stone >= c.stone && t.iron >= c.iron;
-    }
+            for (const donorId of donors) {
+                const currentTotal = this._getTotalResources(targetId);
+                const deficit = {
+                    wood: Math.max(0, this.CONFIG.cost.wood - currentTotal.wood),
+                    stone: Math.max(0, this.CONFIG.cost.stone - currentTotal.stone),
+                    iron: Math.max(0, this.CONFIG.cost.iron - currentTotal.iron),
+                };
 
-    _loadPending() { return this.storage.load(this.STORAGE_KEY_PENDING, {}); }
-    _savePending(p) { this.storage.save(this.STORAGE_KEY_PENDING, p); }
+                if (deficit.wood + deficit.stone + deficit.iron <= 0) break;
 
-    _scanTowns() {
-        const all = this._getAllTowns();
-        return all.filter(t => this._canDoFestival(t.id));
+                const donorRes = this._getResources(donorId);
+                
+                // AQUI ESTÁ O SEU 500 FIXO!
+                const sendAmount = {
+                    wood: Math.min(Math.floor(donorRes.wood), deficit.wood, this.CONFIG.fixedSendAmount),
+                    stone: Math.min(Math.floor(donorRes.stone), deficit.stone, this.CONFIG.fixedSendAmount),
+                    iron: Math.min(Math.floor(donorRes.iron), deficit.iron, this.CONFIG.fixedSendAmount),
+                };
+
+                if (sendAmount.wood + sendAmount.stone + sendAmount.iron < this.CONFIG.minSendTotal) continue;
+
+                const ok = await this._sendResources(donorId, targetId, sendAmount);
+                if (ok) {
+                    this._log(`✓ ${this.getTownName(donorId)} → ${targetName} | 🪵${sendAmount.wood} 🪨${sendAmount.stone} ⚙${sendAmount.iron}`, 'ok');
+                    await new Promise(r => setTimeout(r, 1000));
+                } else {
+                    this._log('✗ Falha ao enviar de ' + this.getTownName(donorId), 'error');
+                }
+            }
+        } catch (e) {
+            this._log('Erro: ' + e, 'error');
+        }
     }
 
     _getTargetTown() {
@@ -199,111 +189,49 @@ var AutoFestival = class extends MultUtil {
 
     _getDonorTowns(targetId) {
         const all = this._getAllTowns();
-        const donors = [];
-        for (const t of all) {
-            const tid = t.id;
-            if (tid === targetId) continue;
-            if (this._hasActiveFestival(tid)) continue;
-            if (this._canDoFestival(tid) && !this._hasEnoughResources(tid)) continue;
-
-            const res = this._getResources(tid);
-            if (!res || (res.wood < 500 && res.stone < 500 && res.iron < 500)) continue;
-            donors.push(tid);
-        }
-        return donors;
+        return all.filter(t => t.id !== targetId && !this._hasActiveFestival(t.id) && this._getResources(t.id) > 500 ? t.id : false);
     }
 
-    async _sendResources(fromTownId, toTownId, amount) {
-        return new Promise(resolve => {
-            const data = {
-                id: parseInt(toTownId, 10),
-                wood: amount.wood || 0,
-                stone: amount.stone || 0,
-                iron: amount.iron || 0,
-                town_id: parseInt(fromTownId, 10),
-                nl_init: true,
-            };
-            const timer = setTimeout(() => resolve(false), 15000);
-            try {
-                uw.gpAjax.ajaxPost('town_info', 'trade', data, false,
-                    (res) => {
-                        clearTimeout(timer);
-                        resolve(Boolean(res && !res.error));
-                    },
-                    () => { clearTimeout(timer); resolve(false); }
-                );
-            } catch (e) { clearTimeout(timer); resolve(false); }
-        });
+    _getResources(tid) {
+        const town = uw.ITowns.towns[tid];
+        if (!town) return { wood: 0, stone: 0, iron: 0 };
+        const r = town.resources();
+        return { wood: r.wood || 0, stone: r.stone || 0, iron: r.iron || 0 };
     }
 
-    async _main() {
-        if (!this._active) return;
-        if (uw.$('.botcheck').length || uw.$('#recaptcha_window').length) return;
+    _getTotalResources(tid) {
+        const current = this._getResources(tid);
+        const pending = this._loadPending()[tid] || { wood: 0, stone: 0, iron: 0 };
+        return { wood: current.wood + pending.wood, stone: current.stone + pending.stone, iron: current.iron + pending.iron };
+    }
 
+    _hasEnoughResources(tid) {
+        const t = this._getTotalResources(tid);
+        return t.wood >= this.CONFIG.cost.wood && t.stone >= this.CONFIG.cost.stone && t.iron >= this.CONFIG.cost.iron;
+    }
+
+    _getAllTowns() {
         try {
-            const targetId = this._getTargetTown();
-            if (!targetId) {
-                this._log('Nenhuma cidade precisa de recursos.', 'info');
-                return;
-            }
-
-            const targetName = this.getTownName(targetId);
-            const donors = this._getDonorTowns(targetId);
-
-            if (!donors.length) {
-                this._log('Sem doadores suficientes para ' + targetName, 'error');
-                return;
-            }
-
-            for (const donorId of donors) {
-                const currentTotal = this._getTotalResources(targetId);
-                if (!currentTotal) break;
-
-                // Cálculo de déficit para não enviar mais do que o necessário para o festival
-                const deficit = {
-                    wood: Math.max(0, this.CONFIG.cost.wood - currentTotal.wood),
-                    stone: Math.max(0, this.CONFIG.cost.stone - currentTotal.stone),
-                    iron: Math.max(0, this.CONFIG.cost.iron - currentTotal.iron),
-                };
-
-                if (deficit.wood + deficit.stone + deficit.iron <= 0) break;
-
-                const donorRes = this._getResources(donorId);
-                if (!donorRes) continue;
-
-                // Envio de 500 ou o máximo que a cidade tem/precisa
-                const sendAmount = {
-                    wood: Math.min(Math.floor(donorRes.wood), deficit.wood, this.CONFIG.fixedSendAmount),
-                    stone: Math.min(Math.floor(donorRes.stone), deficit.stone, this.CONFIG.fixedSendAmount),
-                    iron: Math.min(Math.floor(donorRes.iron), deficit.iron, this.CONFIG.fixedSendAmount),
-                };
-
-                if (sendAmount.wood + sendAmount.stone + sendAmount.iron < this.CONFIG.minSendTotal) continue;
-
-                const ok = await this._sendResources(donorId, targetId, sendAmount);
-                if (ok) {
-                    const pending = this._loadPending();
-                    if (!pending[targetId]) pending[targetId] = { wood: 0, stone: 0, iron: 0, timestamp: Date.now() };
-                    pending[targetId].wood += sendAmount.wood;
-                    pending[targetId].stone += sendAmount.stone;
-                    pending[targetId].iron += sendAmount.iron;
-                    pending[targetId].timestamp = Date.now();
-                    this._savePending(pending);
-
-                    this._log(`✓ ${this.getTownName(donorId)} → ${targetName} | 🪵${sendAmount.wood} 🪨${sendAmount.stone} ⚙${sendAmount.iron}`, 'ok');
-                    await this._randomDelay(1000, 500);
-                } else {
-                    this._log('✗ Falha ao enviar de ' + this.getTownName(donorId), 'error');
-                }
-            }
-
-            this._refreshUI();
-        } catch (e) {
-            this._log('Erro no ciclo: ' + e, 'error');
-        }
+            return uw.MM.getOnlyCollectionByName('Town').models.map(m => ({ id: String(m.attributes.id), name: m.attributes.name }));
+        } catch (e) { return []; }
     }
 
-    _randomDelay(base, variation) {
-        return new Promise(r => setTimeout(r, base + (Math.random() * variation)));
+    _canDoFestival(tid) {
+        try {
+            const town = uw.ITowns.towns[tid];
+            return town && town.getBuildings().attributes.academy >= this.CONFIG.academyMinLevel;
+        } catch (e) { return false; }
     }
-};
+
+    _hasActiveFestival(tid) {
+        try {
+            const celebrations = uw.MM.getModels().Celebration;
+            for (const k in celebrations) {
+                if (celebrations[k].attributes.celebration_type === 'party' && String(celebrations[k].attributes.town_id) === String(tid)) return true;
+            }
+            return false;
+        } catch (e) { return false; }
+    }
+
+    _loadPending() { return this.storage.load(this.STORAGE_KEY_PENDING, {}); }
+    _savePending(p) { this.storage.save
