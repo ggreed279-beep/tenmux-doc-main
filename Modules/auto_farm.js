@@ -23,11 +23,11 @@ var AutoFarm = class extends MultUtil {
     /* ════════════ 1. CONFIGURAÇÃO ════════════ */
 
     INTERVALO_MS  = 10 * 60 * 1000; // 10 minutos entre recolhas
-    TIME_OPTION   = 600;            // 600s = 10 min (valor válido confirmado)
+    TIME_OPTION   = 600;            // base: 600s = 10 min (valor válido confirmado)
+    TIME_OPTION_BOOTY = 2400;       // booty: 2400s (600 é rejeitado p/ booty — confirmado)
     BATCH_SIZE    = 25;             // cidades por pedido (modo Capitão)
     LOTE_PAUSA_MS = 1200;           // pausa entre lotes (modo Capitão)
     ALDEIA_PAUSA_MS = 500;          // pausa entre aldeias (modo individual)
-    MAX_ALDEIAS   = 60;             // limite por ciclo (modos individual/humano)
     JITTER_MS     = 8000;           // variação aleatória (5–13s) por ciclo
 
     /* OPÇÃO 3 — Loop humano: tempos sempre diferentes */
@@ -307,17 +307,19 @@ var AutoFarm = class extends MultUtil {
        Retorna true se conseguiu, false se deve usar o fallback. */
     _recolherCapitao = async (cidades) => {
         try {
-            if (!uw.GameDataPremium.isAdvisorActivated('captain')) {
-                if (!this._avisoSemCapitao) {
+            // Aviso se o jogo diz que não há Capitão, mas NÃO bloqueamos —
+            // a resposta real do servidor é que decide. Se o lote for aceite,
+            // o Capitão está ativo (isAdvisorActivated às vezes falha).
+            try {
+                if (!uw.GameDataPremium.isAdvisorActivated('captain') && !this._avisoSemCapitao) {
                     this._avisoSemCapitao = true;
-                    this.console.log('[AutoFarm] ⚠ OPÇÃO 1 exige o Capitão ativo — a usar cidade a cidade.');
+                    this.console.log('[AutoFarm] ⚠ Jogo reporta Capitão inativo — vou tentar o lote na mesma.');
                 }
-                return false;
-            }
+            } catch (e) {}
 
             const ids = cidades.map(c => parseInt(c.id, 10));
 
-            // Janela de farm simulada UMA vez por sessão (não por ciclo)
+            // Janela de farm simulada (refeita se falhou na sessão)
             if (!this._janelaAberta) {
                 await this.fakeOpening();
                 await this.sleep(1200, 300);
@@ -326,15 +328,43 @@ var AutoFarm = class extends MultUtil {
                 await this.sleep(1200, 300);
             }
 
-            // Lotes de 25 cidades com pausa curta entre eles
+            // Lotes de cidades com pausa curta entre eles.
+            // base=600 (10 min) + booty=2400 (booty NÃO aceita 600).
+            let lotesOk = 0, lotesFalha = 0;
             for (let i = 0; i < ids.length; i += this.BATCH_SIZE) {
                 const lote = ids.slice(i, i + this.BATCH_SIZE);
-                await this.claimMultiple(lote, this.TIME_OPTION, this.TIME_OPTION);
+                try {
+                    await this.claimMultiple(lote, this.TIME_OPTION, this.TIME_OPTION_BOOTY);
+                    lotesOk++;
+                } catch (e) {
+                    // 2ª tentativa com a janela reaberta (às vezes a sessão
+                    // expira e um fakeOpening resolve)
+                    try {
+                        this._janelaAberta = false;
+                        await this.fakeOpening();
+                        await this.sleep(1200, 300);
+                        await this.fakeSelectAll(lote);
+                        await this.sleep(1200, 300);
+                        await this.claimMultiple(lote, this.TIME_OPTION, this.TIME_OPTION_BOOTY);
+                        lotesOk++;
+                    } catch (e2) {
+                        lotesFalha++;
+                        this.console.log('[AutoFarm] ⚠ Lote ' + (lotesOk + lotesFalha) + ' falhou: ' +
+                            (e2 && e2.message ? e2.message : e2));
+                    }
+                }
                 if (i + this.BATCH_SIZE < ids.length) await this.sleep(this.LOTE_PAUSA_MS, 300);
             }
 
-            this.stats.recolhas += cidades.length;
-            this.console.log('[AutoFarm] 🧭 ' + cidades.length + ' cidade(s) recolhida(s) via Capitão.');
+            if (lotesOk === 0) {
+                this._janelaAberta = false;
+                return false; // fallback para cidade a cidade
+            }
+
+            const recolhidas = lotesOk * this.BATCH_SIZE;
+            this.stats.recolhas += Math.min(recolhidas, cidades.length);
+            this.console.log('[AutoFarm] 🧭 ' + cidades.length + ' cidade(s) recolhida(s) via Capitão (' +
+                lotesOk + ' lote(s) OK, ' + lotesFalha + ' falha(s)).');
             this._aposRecolha();
             return true;
         } catch (e) {
@@ -372,17 +402,11 @@ var AutoFarm = class extends MultUtil {
                     await this.claimSingle(parseInt(c.id, 10), a.farm_town_id, rel.id, 1);
                     await this.sleep(this.ALDEIA_PAUSA_MS);
                     contador++;
-                    if (contador >= this.MAX_ALDEIAS) {
-                        this._aposRecolha();
-                        this.stats.recolhas += contador;
-                        this.console.log('[AutoFarm] 👟 Limite de ' + this.MAX_ALDEIAS + ' aldeias neste ciclo.');
-                        return;
-                    }
                 }
             }
 
             this.stats.recolhas += contador;
-            if (contador > 0) this.console.log('[AutoFarm] 👟 ' + contador + ' aldeia(s) recolhida(s) cidade a cidade.');
+            this.console.log('[AutoFarm] 👟 ' + contador + ' aldeia(s) recolhida(s) cidade a cidade.');
             this._aposRecolha();
         } catch (e) {
             this.console.log('[AutoFarm] Erro no modo individual: ' + (e && e.message ? e.message : e));
@@ -464,13 +488,6 @@ var AutoFarm = class extends MultUtil {
                     if (Math.random() < this.HUMANO_DISTRACAO_CHANCE) {
                         const mediaD = (this.HUMANO_DISTRACAO_MIN_MS + this.HUMANO_DISTRACAO_MAX_MS) / 2;
                         await this.sleep(mediaD, mediaD - this.HUMANO_DISTRACAO_MIN_MS);
-                    }
-
-                    if (contador >= this.MAX_ALDEIAS) {
-                        this._aposRecolha();
-                        this.stats.recolhas += contador;
-                        this.console.log('[AutoFarm] 🧑 Limite de ' + this.MAX_ALDEIAS + ' aldeias neste ciclo.');
-                        return;
                     }
                 }
             }
