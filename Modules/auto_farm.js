@@ -1,652 +1,528 @@
-class ModernUtil {
-    REQUIREMENTS = {
-        sword: {}, archer: { research: 'archer' }, hoplite: { research: 'hoplite' }, slinger: { research: 'slinger' },
-        catapult: { research: 'catapult' }, rider: { research: 'rider', building: 'barracks', level: 10 },
-        chariot: { research: 'chariot', building: 'barracks', level: 15 }, big_transporter: { building: 'docks', level: 1 },
-        small_transporter: { research: 'small_transporter', building: 'docks', level: 1 }, bireme: { research: 'bireme', building: 'docks', level: 1 },
-        attack_ship: { research: 'attack_ship', building: 'docks', level: 1 }, trireme: { research: 'trireme', building: 'docks', level: 1 },
-        colonize_ship: { research: 'colonize_ship', building: 'docks', level: 10 },
-    };
+// Deteta automaticamente se a tua classe base é MultUtil ou ModernUtil
+const BaseUtilClass = typeof MultUtil !== 'undefined' ? MultUtil : (typeof ModernUtil !== 'undefined' ? ModernUtil : class {});
 
-    constructor(console, storage) {
-        this.console = console;
-        this.storage = storage;
-    }
-
-    sleep = (ms, stdDev) => {
-        if (typeof stdDev === 'undefined') return new Promise(resolve => setTimeout(resolve, ms));
-        const mean = ms; let u = 0, v = 0;
-        while (u === 0) u = Math.random(); while (v === 0) v = Math.random();
-        let num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-        num = num * stdDev + mean;
-        return new Promise(resolve => setTimeout(resolve, num));
-    };
-
-    generateList = () => {
-        const townList = uw.MM.getOnlyCollectionByName('Town').models;
-        const islandsList = []; const polisList = [];
-        for (const town of townList) {
-            const { island_id, id, on_small_island } = town.attributes;
-            if (on_small_island) continue;
-            if (!islandsList.includes(island_id)) { islandsList.push(island_id); polisList.push(id); }
-        }
-        return polisList;
-    };
-
-    getButtonHtml(id, text, fn, props) {
-        const name = this.constructor.name.charAt(0).toLowerCase() + this.constructor.name.slice(1);
-        props = isNaN(parseInt(props)) ? `'${props}'` : props;
-        const click = `window.modernBot.${name}.${fn.name}(${props || ''})`;
-        return `<div id="${id}" style="cursor: pointer" class="button_new" onclick="${click}"><div class="left"></div><div class="right"></div><div class="caption js-caption"> ${text} <div class="effect js-effect"></div></div></div>`;
-    }
-
-    getTitleHtml(id, text, fn, props, enable, desc = '(click to toggle)') {
-        const name = this.constructor.name.charAt(0).toLowerCase() + this.constructor.name.slice(1);
-        props = isNaN(parseInt(props)) && props ? `"${props}"` : props;
-        const click = `window.modernBot.${name}.${fn.name}(${props || ''})`;
-        const filter = 'brightness(100%) saturate(186%) hue-rotate(241deg)';
-        return `<div class="game_border_top"></div><div class="game_border_bottom"></div><div class="game_border_left"></div><div class="game_border_right"></div><div class="game_border_corner corner1"></div><div class="game_border_corner corner2"></div><div class="game_border_corner corner3"></div><div class="game_border_corner corner4"></div><div id="${id}" style="cursor: pointer; filter: ${enable ? filter : ''}" class="game_header bold" onclick="${click}">${text}<span class="command_count"></span><div style="position: absolute; right: 10px; top: 4px; font-size: 10px;"> ${desc} </div></div>`;
-    }
-
-    countPopulation(obj) {
-        const data = GameData.units; let total = 0;
-        for (let key in obj) { total += data[key].population * obj[key]; }
-        return total;
-    }
-
-    isActive(type) { return uw.GameDataPremium.isAdvisorActivated(type); }
-
-    createButton = (id, text, fn) => {
-        const $button = $('<div>', { 'id': id, 'class': 'button_new' });
-        $button.append($('<div>', { 'class': 'left' })).append($('<div>', { 'class': 'right' }));
-        $button.append($('<div>', { 'class': 'caption js-caption', 'html': `${text} <div class="effect js-effect"></div>` }));
-        if (fn) $(document).on('click', `#${id}`, fn);
-        return $button;
-    }
-
-    createTitle = (id, text, fn, desc = '(click to toggle)') => {
-        const $div = $('<div>').addClass('game_header bold').attr('id', id).css({ cursor: 'pointer', position: 'relative' }).html(text);
-        const $span = $('<span>').addClass('command_count');
-        const $descDiv = $('<div>').css({ position: 'absolute', right: '10px', top: '4px', fontSize: '10px' }).text(desc);
-        $div.append($span).append($descDiv);
-        if (fn) $(document).on('click', `#${id}`, fn);
-        return $('<div>').append('<div class="game_border_top"></div>').append('<div class="game_border_bottom"></div>').append('<div class="game_border_left"></div>').append('<div class="game_border_right"></div>').append('<div class="game_border_corner corner1"></div>').append('<div class="game_border_corner corner2"></div>').append('<div class="game_border_corner corner3"></div>').append('<div class="game_border_corner corner4"></div>').append($div);
-    }
-
-    createActivity = (background) => {
-        const $activity_wrap = $('<div class="activity_wrap"></div>');
-        const $activity = $('<div class="activity"></div>');
-        const $icon = $('<div class="icon"></div>').css({ "background": background, "position": "absolute", "top": "-1px", "left": "-1px" });
-        const $count = $('<div class="count js-caption"></div>').text(0);
-        $icon.append($count); $activity.append($icon); $activity_wrap.append($activity);
-        return { $activity, $count };
-    }
-
-    createPopup = (left, width, height, $content) => {
-        const $box = $('<div class="sandy-box js-dropdown-list" id="toolbar_activity_recruits_list"></div>').css({ "left": `${left}px`, "position": "absolute", "width": `${width}px`, "height": `${height}px`, "top": "29px", "margin-left": "0px", "display": "none" });
-        const $corner_tl = $('<div class="corner_tl"></div>'); const $corner_tr = $('<div class="corner_tr"></div>');
-        const $corner_bl = $('<div class="corner_bl"></div>'); const $corner_br = $('<div class="corner_br"></div>');
-        const $border_t = $('<div class="border_t"></div>'); const $border_b = $('<div class="border_b"></div>');
-        const $border_l = $('<div class="border_l"></div>'); const $border_r = $('<div class="border_r"></div>');
-        const $middle = $('<div class="middle"></div>').css({ "left": "10px", "right": "20px", "top": "14px", "bottom": "20px" });
-        const $middle_content = $('<div class="content js-dropdown-item-list"></div>').append($content);
-        $middle.append($middle_content);
-        $box.append($corner_tl, $corner_tr, $corner_bl, $corner_br, $border_t, $border_b, $border_l, $border_r, $middle);
-        return $box;
-    }
-}
-
-class AutoFarm extends ModernUtil {
+class AutoFarm extends BaseUtilClass {
     constructor(c, s) {
         super(c, s);
+        this.injectStyles();
 
-        /* ---------- Configurações guardadas ---------- */
-        this.timing = this.storage.load('af_level', 300000);
-        this.percent = this.storage.load('af_percent', 0);   // 0 = "Todas"
-        this.active = this.storage.load('af_active', false);
-        this.gui = this.storage.load('af_gui', false);
+        // Compatibilidade de armazenamento (MultUtil/ModernUtil ou GM_ functions)
+        const getVal = (key, def) => {
+            if (this.storage && typeof this.storage.load === 'function') return this.storage.load(key, def);
+            if (typeof GM_getValue !== 'undefined') return GM_getValue(key, def);
+            return def;
+        };
+        const setVal = (key, val) => {
+            if (this.storage && typeof this.storage.save === 'function') return this.storage.save(key, val);
+            if (typeof GM_setValue !== 'undefined') return GM_setValue(key, val);
+        };
 
-        /* ---------- Estado interno ---------- */
+        this.timing = parseInt(getVal('af_timing', '300000'));
+        this.percent = parseFloat(getVal('af_percent', '1'));
+        this.active = getVal('af_active', false);
+        this.gui = getVal('af_gui', false);
+
         this.timer = 0;
         this.lastTime = Date.now();
+        this.intervalId = null;
         this.polis_list = [];
-        this._claiming = false;
-        this._captchaLogged = false;
-        this._statTick = 0;
-        this._farmsCached = 0;
-        this._intervalId = null;
+        this.getVal = getVal;
+        this.setVal = setVal;
 
-        /* ---------- Ícone + contador na barra ---------- */
-        const { $activity, $count } = this.createActivity("url(https://gpit.innogamescdn.com/images/game/premium_features/feature_icons_2.08.png) no-repeat 0 -240px");
-        this.$activity = $activity;
-        this.$count = $count;
-        this.$activity.on('click', () => this.toggle());
+        this.createUI();
 
-        /* ---------- UI ---------- */
-        this.injectStyles();
-        this.createDropdown();
-
-        /* ---------- Arranque ---------- */
-        const wasActive = !!this.active;
-        this.active = null; // Reset para o _start controlar
-        if (wasActive) this._start();
-        this.updateButtons();
+        if (this.active) {
+            this.startFarm();
+        }
+        this.updateUI();
     }
 
-    /* =========================================================
-       ESTILOS
-       ========================================================= */
-    injectStyles = () => {
-        if (uw.document.getElementById('mult_af_styles')) return;
-        const css = `
-            .mult_af_stats { background: rgba(0,0,0,0.35); border: 1px solid #3d2b1f; border-radius: 6px; padding: 6px 8px; margin: 4px 0; font-size: 11px; color: #d4c5a0; }
-            .mult_af_stats .row { display: flex; justify-content: space-between; margin: 1px 0; }
-            .mult_af_stats .val { color: #ffd700; font-weight: bold; }
-            .mult_af_log { max-height: 80px; overflow-y: auto; background: rgba(0,0,0,0.4); border: 1px solid #2a1a12; border-radius: 4px; padding: 4px 6px; margin-top: 6px; font-size: 10px; color: #8a8a7a; }
-            .mult_af_log_success { color: #8bc34a; }
-            .mult_af_log_error { color: #ef5350; }
-            .mult_af_log_info { color: #64b5f6; }
-            .mult_af_log_warning { color: #ffb74d; }
-            .mult_af_notif { position: fixed; top: 80px; right: 20px; background: rgba(0,0,0,0.85); color: #fff; padding: 10px 18px; border-radius: 8px; border-left: 4px solid #4CAF50; box-shadow: 0 4px 20px rgba(0,0,0,0.5); z-index: 99999; font-size: 13px; animation: mult_af_slide 0.4s ease-out; }
-            @keyframes mult_af_slide { from { transform: translateX(80px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-            .mult_af_fade { opacity: 0; transition: opacity 0.5s; }
+    injectStyles() {
+        if (document.getElementById('af-custom-styles')) return;
+        const styles = `
+            .af-container { position: absolute; top: 3px; right: 120px; z-index: 999; }
+            .af-wrapper { display: flex; align-items: center; background: rgba(0, 0, 0, 0.7); border-radius: 8px; padding: 3px 10px; gap: 8px; border: 1px solid rgba(255, 215, 0, 0.2); backdrop-filter: blur(4px); cursor: pointer; }
+            .af-wrapper:hover { border-color: rgba(255, 215, 0, 0.5); }
+            .af-icon { width: 28px; height: 28px; background: url(https://gpit.innogamescdn.com/images/game/premium_features/feature_icons_2.08.png) no-repeat 0 -240px; background-size: 28px; border-radius: 4px; transition: all 0.3s; }
+            .af-icon.active { box-shadow: 0 0 20px rgba(76, 175, 80, 0.4); animation: af-pulse 2s infinite; }
+            @keyframes af-pulse { 0%, 100% { box-shadow: 0 0 10px rgba(76, 175, 80, 0.2); } 50% { box-shadow: 0 0 25px rgba(76, 175, 80, 0.6); } }
+            .af-timer { color: #fff; font-size: 13px; font-weight: bold; min-width: 45px; text-align: center; font-family: monospace; text-shadow: 0 0 10px rgba(0,0,0,0.8); }
+            .af-timer.warning { color: #ff9800; animation: af-blink 1s infinite; }
+            .af-timer.danger { color: #f44336; animation: af-blink 0.5s infinite; }
+            @keyframes af-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+            .af-status { width: 10px; height: 10px; border-radius: 50%; display: inline-block; transition: all 0.3s; }
+            .af-status.on { background: #4CAF50; box-shadow: 0 0 10px #4CAF50; }
+            .af-status.off { background: #f44336; box-shadow: 0 0 10px #f44336; }
+            .af-dropdown { display: none; position: absolute; top: 40px; right: 0; background: linear-gradient(180deg, #2c1810 0%, #1a0f0a 100%); border: 1px solid #8b7355; border-radius: 10px; padding: 15px; min-width: 260px; box-shadow: 0 8px 32px rgba(0,0,0,0.8); z-index: 1000; color: #d4c5a0; }
+            .af-dropdown.show { display: block; animation: af-slideDown 0.3s ease-out; }
+            @keyframes af-slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+            .af-title { text-align: center; font-size: 16px; font-weight: bold; color: #ffd700; margin-bottom: 12px; border-bottom: 1px solid #5a4a3a; padding-bottom: 8px; }
+            .af-section { margin: 10px 0; }
+            .af-label { font-size: 12px; color: #a89070; margin-bottom: 5px; display: block; }
+            .af-btn-group { display: flex; gap: 4px; flex-wrap: wrap; }
+            .af-btn { padding: 5px 12px; background: linear-gradient(180deg, #3d2b1f 0%, #2a1a12 100%); border: 1px solid #5a4a3a; border-radius: 4px; color: #d4c5a0; cursor: pointer; font-size: 11px; font-weight: bold; transition: all 0.2s; flex: 1; text-align: center; user-select: none; }
+            .af-btn:hover { background: linear-gradient(180deg, #4d3b2f 0%, #3a2a22 100%); border-color: #8b7355; }
+            .af-btn.active { background: linear-gradient(180deg, #4a7a3a 0%, #2d5a1d 100%); border-color: #6a9a5a; color: #fff; }
+            .af-btn.primary { background: linear-gradient(180deg, #7a6a3a 0%, #5a4a2a 100%); border-color: #9a8a5a; font-size: 13px; padding: 8px 12px; }
+            .af-btn.primary.active { background: linear-gradient(180deg, #4a8a3a 0%, #2d6a1d 100%); border-color: #6aaa5a; }
+            .af-btn.danger { background: linear-gradient(180deg, #7a3a3a 0%, #5a2a2a 100%); border-color: #9a5a5a; }
+            .af-stats { background: rgba(0,0,0,0.3); border-radius: 6px; padding: 8px 10px; margin: 8px 0; border: 1px solid #3d2b1f; font-size: 11px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; }
+            .af-stats .value { color: #ffd700; float: right; }
+            .af-log { max-height: 60px; overflow-y: auto; background: rgba(0,0,0,0.4); border-radius: 4px; padding: 5px 8px; font-size: 10px; color: #8a8a7a; margin-top: 8px; border: 1px solid #2a1a12; }
+            .af-log .log-success { color: #8bc34a; }
+            .af-log .log-error { color: #ef5350; }
+            .af-log .log-info { color: #64b5f6; }
+            .af-log .log-warning { color: #ffb74d; }
+            .af-notification { position: fixed; top: 80px; right: 20px; background: rgba(0,0,0,0.85); color: #fff; padding: 12px 20px; border-radius: 8px; border-left: 4px solid #4CAF50; box-shadow: 0 4px 20px rgba(0,0,0,0.5); z-index: 9999; animation: af-slideRight 0.5s ease-out; max-width: 300px; font-size: 13px; backdrop-filter: blur(8px); }
+            @keyframes af-slideRight { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+            .af-notification.fade-out { animation: af-fadeOut 0.5s ease-in forwards; }
+            @keyframes af-fadeOut { to { opacity: 0; transform: translateX(50px); } }
         `;
-        uw.$('<style id="mult_af_styles"></style>').text(css).appendTo('head');
-    };
+        const styleElem = document.createElement('style');
+        styleElem.id = 'af-custom-styles';
+        styleElem.textContent = styles;
+        document.head.appendChild(styleElem);
+    }
 
-    /* =========================================================
-       HELPERS DE UI & AJAX
-       ========================================================= */
-    formatTime = (totalSeconds) => {
-        totalSeconds = Math.max(0, Math.round(totalSeconds));
-        const h = Math.floor(totalSeconds / 3600);
-        const m = Math.floor((totalSeconds % 3600) / 60);
-        const s = totalSeconds % 60;
-        const mm = String(m).padStart(2, '0');
-        const ss = String(s).padStart(2, '0');
-        return h > 0 ? h + ':' + mm + ':' + ss : mm + ':' + ss;
-    };
+    createUI() {
+        this.$container = $('<div class="af-container"></div>');
+        this.$wrapper = $('<div class="af-wrapper"></div>');
+        this.$icon = $('<div class="af-icon"></div>');
+        this.$icon.on('click', () => this.toggle());
+        this.$timer = $('<span class="af-timer">00:00</span>');
+        this.$status = $('<span class="af-status off"></span>');
+        this.createDropdown();
 
-    notify = (message, type) => {
-        const colors = { on: '#4CAF50', off: '#f44336', info: '#64b5f6', warning: '#ffb74d' };
-        const color = colors[type] || colors.info;
-        const $n = uw.$('<div class="mult_af_notif"></div>').text(message).css('border-left-color', color);
-        uw.$('body').append($n);
-        setTimeout(() => {
-            $n.addClass('mult_af_fade');
-            setTimeout(() => $n.remove(), 500);
-        }, 3000);
-    };
+        this.$wrapper.append(this.$status, this.$icon, this.$timer);
+        this.$container.append(this.$wrapper, this.$dropdown);
 
-    log = (message, type) => {
-        if (!this.$log || !this.$log.length) return;
-        const time = new Date().toLocaleTimeString();
-        const $entry = uw.$('<div></div>').addClass('mult_af_log_' + (type || 'info')).text('[' + time + '] ' + message);
-        this.$log.prepend($entry);
-        while (this.$log.children().length > 25) this.$log.children().last().remove();
-    };
-
-    ajaxPostWithTimeout = (controller, action, data, timeout = 15000) => {
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error('Timeout')), timeout);
-            uw.gpAjax.ajaxPost(controller, action, data, false, (res) => {
-                clearTimeout(timer);
-                if (res && !res.error) resolve(res);
-                else reject(new Error(res?.error || 'Ajax Error'));
-            }, () => { clearTimeout(timer); reject(new Error('Network Error')); });
-        });
-    };
-
-    ajaxGetWithTimeout = (controller, action, data, timeout = 15000) => {
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error('Timeout')), timeout);
-            uw.gpAjax.ajaxGet(controller, action, data, false, (res) => {
-                clearTimeout(timer);
-                if (res && !res.error) resolve(res);
-                else reject(new Error(res?.error || 'Ajax Error'));
-            }, () => { clearTimeout(timer); reject(new Error('Network Error')); });
-        });
-    };
-
-    updateStats = () => {
-        if (!this.$statStatus) return;
-        const secs = Math.max(0, Math.round(this.timer / 1000));
-        this.$statStatus.text(this.active ? 'Ativo' : 'Pausa').css('color', this.active ? '#1aff1a' : '#ff5555');
-
-        let captain = '?';
-        try { captain = uw.GameDataPremium.isAdvisorActivated('captain') ? 'Sim' : 'Não'; } catch (e) {}
-        this.$statCaptain.text(captain);
-
-        this._statTick++;
-        if (this._statTick % 10 === 1 || !this._farmsCached) {
-            try { this._farmsCached = this.generateList().length; } catch (e) { this._farmsCached = this.polis_list.length; }
-        }
-        this.$statFarms.text(this._farmsCached || 0);
-        this.$statNext.text(this.active ? (this.timer > 0 ? this.formatTime(secs) : 'Agora!') : '--');
-    };
-
-    /* =========================================================
-       DROPDOWN
-       ========================================================= */
-    createDropdown = () => {
-        this.$content = uw.$("<div></div>");
-        this.$title = uw.$("<p></p>").text('Auto-Farm').css({ "text-align": "center", "margin": "2px", "font-weight": "bold", "font-size": "16px" });
-        this.$content.append(this.$title);
-
-        this.$power = uw.$("<p></p>").text('Controle').css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$btnOn = this.createButton("mult_farm_on", "▶ START", () => { if (!this.active) this.toggle(); }).css({ "width": "110px" });
-        this.$btnOff = this.createButton("mult_farm_off", "⏸ PAUSE", () => { if (this.active) this.toggle(); }).css({ "width": "110px" });
-        this.$content.append(this.$power, this.$btnOn, this.$btnOff);
-
-        this.$btnNow = this.createButton("mult_farm_now", "🌾 FARM AGORA", this.forceFarm).css({ "width": "220px", "margin-top": "5px" });
-        this.$content.append(this.$btnNow);
-
-        this.$statStatus = uw.$('<span class="val"></span>');
-        this.$statCaptain = uw.$('<span class="val"></span>');
-        this.$statFarms = uw.$('<span class="val"></span>');
-        this.$statNext = uw.$('<span class="val"></span>');
-        const row = (label, $val) => uw.$('<div class="row"></div>').append(uw.$('<span></span>').text(label), $val);
-        this.$stats = uw.$('<div class="mult_af_stats"></div>').append(
-            row('Estado', this.$statStatus),
-            row('Capitão', this.$statCaptain),
-            row('Cidades', this.$statFarms),
-            row('Próxima', this.$statNext)
-        );
-        this.$content.append(this.$stats);
-
-        this.$duration = uw.$("<p></p>").text('Intervalo').css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$button5 = this.createButton("mult_farm_5", "5 min", this.toggleDuration);
-        this.$button10 = this.createButton("mult_farm_10", "10 min", this.toggleDuration);
-        this.$button20 = this.createButton("mult_farm_20", "20 min", this.toggleDuration);
-        this.$content.append(this.$duration, this.$button5, this.$button10, this.$button20);
-
-        this.$storage = uw.$("<p></p>").text('Filtro Armazém').css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$buttonAll = this.createButton("mult_farm_all", "Todas", this.toggleStorage).css({ "width": "70px" });
-        this.$button80 = this.createButton("mult_farm_80", "80%", this.toggleStorage).css({ "width": "60px" });
-        this.$button90 = this.createButton("mult_farm_90", "90%", this.toggleStorage).css({ "width": "60px" });
-        this.$button100 = this.createButton("mult_farm_100", "100%", this.toggleStorage).css({ "width": "60px" });
-        this.$content.append(this.$storage, this.$buttonAll, this.$button80, this.$button90, this.$button100);
-
-        this.$gui = uw.$("<p></p>").text('Modo GUI').css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
-        this.$guiOn = this.createButton("mult_farm_gui_on", "ON", this.toggleGui);
-        this.$guiOff = this.createButton("mult_farm_gui_off", "OFF", this.toggleGui);
-        this.$content.append(this.$gui, this.$guiOn, this.$guiOff);
-
-        this.$log = uw.$('<div class="mult_af_log"></div>');
-        this.$content.append(this.$log);
-
-        this.$popup = this.createPopup(423, 250, 170, this.$content);
-        this.$popup.css({ 'height': 'auto', 'min-height': '170px' });
-        this.$popup.find('.middle').css({ 'position': 'relative', 'top': '0', 'bottom': '0', 'left': '0', 'right': '0', 'padding': '10px' });
-        this.dropdown_active = false;
-
-        const close = () => { if (!this.dropdown_active) this.$popup.hide(); this.dropdown_active = false; };
-        const open = () => { if (this.dropdown_active) this.$popup.show(); };
-
-        this.$activity.on({
-            mouseenter: () => { this.dropdown_active = true; setTimeout(open, 1000); },
-            mouseleave: () => { this.dropdown_active = false; setTimeout(close, 50); }
-        });
-        this.$popup.on({
-            mouseenter: () => { this.dropdown_active = true; },
-            mouseleave: () => { this.dropdown_active = false; setTimeout(close, 50); }
-        });
-
-        this.log('Sistema pronto — prime START', 'info');
-    };
-
-    /* =========================================================
-       ESTADO DOS BOTÕES
-       ========================================================= */
-    updateButtons = () => {
-        this.$button5.addClass('disabled'); this.$button10.addClass('disabled'); this.$button20.addClass('disabled');
-        this.$buttonAll.addClass('disabled'); this.$button80.addClass('disabled'); this.$button90.addClass('disabled'); this.$button100.addClass('disabled');
-
-        if (this.timing == 300000) this.$button5.removeClass('disabled');
-        if (this.timing == 600000) this.$button10.removeClass('disabled');
-        if (this.timing == 1200000) this.$button20.removeClass('disabled');
-
-        if (this.percent == 0) this.$buttonAll.removeClass('disabled');
-        if (this.percent == 0.8) this.$button80.removeClass('disabled');
-        if (this.percent == 0.9) this.$button90.removeClass('disabled');
-        if (this.percent == 1) this.$button100.removeClass('disabled');
-
-        this.$btnOn.addClass('disabled'); this.$btnOff.addClass('disabled');
-        if (this.active) this.$btnOn.removeClass('disabled');
-        else this.$btnOff.removeClass('disabled');
-
-        if (!this.active) { this.$count.css('color', "red"); this.$count.text("off"); }
-
-        this.$guiOn.addClass('disabled'); this.$guiOff.addClass('disabled');
-        if (this.gui) this.$guiOn.removeClass('disabled');
-        else this.$guiOff.removeClass('disabled');
-
-        this.updateStats();
-    };
-
-    /* =========================================================
-       HANDLERS DOS BOTÕES
-       ========================================================= */
-    toggleDuration = (event) => {
-        const { id } = event.currentTarget;
-        if (id == "mult_farm_5") this.timing = 300000;
-        if (id == "mult_farm_10") this.timing = 600000;
-        if (id == "mult_farm_20") this.timing = 1200000;
-        this.storage.save('af_level', this.timing);
-        this.log('Intervalo: ' + (this.timing / 60000) + ' min', 'info');
-        this.updateButtons();
-    };
-
-    toggleStorage = (event) => {
-        const { id } = event.currentTarget;
-        if (id == "mult_farm_all") this.percent = 0;
-        if (id == "mult_farm_80") this.percent = 0.8;
-        if (id == "mult_farm_90") this.percent = 0.9;
-        if (id == "mult_farm_100") this.percent = 1;
-        this.storage.save('af_percent', this.percent);
-        this._farmsCached = 0;
-        this.log('Armazém: ' + (this.percent === 0 ? 'Todas as cidades' : (this.percent * 100) + '%'), 'info');
-        this.updateButtons();
-    };
-
-    toggleGui = (event) => {
-        const { id } = event.currentTarget;
-        if (id == "mult_farm_gui_on") this.gui = true;
-        if (id == "mult_farm_gui_off") this.gui = false;
-        this.storage.save('af_gui', this.gui);
-        this.log('Modo GUI: ' + (this.gui ? 'ON' : 'OFF'), 'info');
-        this.updateButtons();
-    };
-
-    /* =========================================================
-       START / PAUSE
-       ========================================================= */
-    _start = () => {
-        this.lastTime = Date.now();
-        this.timer = 0; /* farm IMEDIATO ao ligar */
-        this.active = setInterval(() => this.main(), 1000); /* tick de 1s = contagem fluida */
-    };
-
-    _stop = () => {
-        if (this.active) clearInterval(this.active);
-        this.active = null;
-    };
-
-    toggle = () => {
-        if (this.active) {
-            this._stop();
-            this.log('Auto-Farm em pausa', 'warning');
-            this.notify('Auto-Farm em pausa', 'off');
+        const $uiBox = $('#ui_box');
+        if ($uiBox.length) {
+            $uiBox.append(this.$container);
         } else {
-            this._start();
-            this.log('Auto-Farm iniciado — a coletar...', 'success');
-            this.notify('Auto-Farm iniciado!', 'on');
+            setTimeout(() => this.createUI(), 500);
+            return;
         }
-        this.storage.save('af_active', !!this.active);
-        this.updateButtons();
-    };
+        this.setupDropdownEvents();
+    }
 
-    /* =========================================================
-       LISTA DE CIDADES
-       ========================================================= */
-    generateList = () => {
+    createDropdown() {
+        this.$dropdown = $(`
+            <div class="af-dropdown">
+                <div class="af-title">🌾 Auto-Farm</div>
+                <div class="af-section">
+                    <label class="af-label">⏱️ Intervalo</label>
+                    <div class="af-btn-group" id="af-time-group">
+                        <div class="af-btn" data-time="5">5min</div>
+                        <div class="af-btn" data-time="10">10min</div>
+                        <div class="af-btn" data-time="20">20min</div>
+                    </div>
+                </div>
+                <div class="af-section">
+                    <label class="af-label">📊 Armazenamento</label>
+                    <div class="af-btn-group" id="af-percent-group">
+                        <div class="af-btn" data-percent="0.8">80%</div>
+                        <div class="af-btn" data-percent="0.9">90%</div>
+                        <div class="af-btn" data-percent="1.0">100%</div>
+                    </div>
+                </div>
+                <div class="af-section">
+                    <label class="af-label">🖥️ Modo GUI</label>
+                    <div class="af-btn-group" id="af-gui-group">
+                        <div class="af-btn" data-gui="0">OFF</div>
+                        <div class="af-btn" data-gui="1">ON</div>
+                    </div>
+                </div>
+                <div class="af-stats">
+                    <span>Status: <span class="value" id="af-status-text">Parado</span></span>
+                    <span>Timer: <span class="value" id="af-timer-display">--</span></span>
+                    <span>Fazendas: <span class="value" id="af-farms-count">0</span></span>
+                    <span>Próxima: <span class="value" id="af-next-collect">--</span></span>
+                </div>
+                <div style="display: flex; gap: 5px; margin-top: 8px;">
+                    <div class="af-btn primary" id="af-start-btn">▶ Iniciar</div>
+                    <div class="af-btn danger" id="af-stop-btn">⏹ Parar</div>
+                </div>
+                <div class="af-log" id="af-log">
+                    <div class="log-entry log-info">🔹 Sistema pronto</div>
+                </div>
+            </div>
+        `);
+
+        this.$dropdown.find('#af-time-group .af-btn').on('click', (e) => {
+            const time = parseInt($(e.target).data('time')) * 60000;
+            this.timing = time;
+            this.setVal('af_timing', time.toString());
+            this.updateUI();
+            this.log(`Intervalo: ${time/60000}min`, 'info');
+        });
+
+        this.$dropdown.find('#af-percent-group .af-btn').on('click', (e) => {
+            const percent = parseFloat($(e.target).data('percent'));
+            this.percent = percent;
+            this.setVal('af_percent', percent.toString());
+            this.updateUI();
+            this.log(`Armazenamento: ${percent*100}%`, 'info');
+        });
+
+        this.$dropdown.find('#af-gui-group .af-btn').on('click', (e) => {
+            const gui = parseInt($(e.target).data('gui')) === 1;
+            this.gui = gui;
+            this.setVal('af_gui', gui);
+            this.updateUI();
+            this.log(`GUI Mode: ${gui ? 'ON' : 'OFF'}`, 'info');
+        });
+
+        this.$dropdown.find('#af-start-btn').on('click', () => this.startFarm());
+        this.$dropdown.find('#af-stop-btn').on('click', () => this.stopFarm());
+    }
+
+    setupDropdownEvents() {
+        let hoverTimeout = null;
+        this.$wrapper.on('mouseenter', () => {
+            clearTimeout(hoverTimeout);
+            this.$dropdown.addClass('show');
+        });
+        this.$wrapper.on('mouseleave', () => {
+            hoverTimeout = setTimeout(() => {
+                if (!this.$dropdown.is(':hover')) {
+                    this.$dropdown.removeClass('show');
+                }
+            }, 300);
+        });
+        this.$dropdown.on('mouseenter', () => clearTimeout(hoverTimeout));
+        this.$dropdown.on('mouseleave', () => {
+            hoverTimeout = setTimeout(() => {
+                this.$dropdown.removeClass('show');
+            }, 300);
+        });
+    }
+
+    toggle() {
+        if (this.active) this.stopFarm();
+        else this.startFarm();
+    }
+
+    startFarm() {
+        if (this.active) return;
+        this.active = true;
+        this.setVal('af_active', true);
+        this.updateTimer();
+        this.intervalId = setInterval(() => this.main(), 1000);
+        this.log('🚀 Auto-Farm iniciado!', 'success');
+        this.showNotification('Auto-Farm iniciado!');
+        this.updateUI();
+    }
+
+    stopFarm() {
+        if (!this.active) return;
+        this.active = false;
+        this.setVal('af_active', false);
+        if (this.intervalId) {
+            clearInterval(this.intervalId);
+            this.intervalId = null;
+        }
+        this.log('⏹️ Auto-Farm parado', 'warning');
+        this.showNotification('Auto-Farm parado', 'warning');
+        this.updateUI();
+    }
+
+    generateList() {
         const islands_list = new Set();
         const polis_list = [];
         const { models: towns } = uw.MM.getOnlyCollectionByName('Town');
-
         for (const town of towns) {
             const { on_small_island, island_id, id } = town.attributes;
             if (on_small_island || islands_list.has(island_id)) continue;
+            const { wood, stone, iron, storage } = uw.ITowns.getTown(id).resources();
+            const minResource = Math.min(wood, stone, iron);
+            const min_percent = minResource / storage;
             islands_list.add(island_id);
-
-            if (this.percent > 0) {
-                const { wood, stone, iron, storage } = uw.ITowns.getTown(id).resources();
-                const minResource = Math.min(wood, stone, iron);
-                const min_percent = storage > 0 ? minResource / storage : 0;
-                if (min_percent < this.percent) continue;
-            }
-            polis_list.push(town.id);
+            polis_list.push(id);
         }
         return polis_list;
-    };
+    }
 
-    getNextCollection = () => {
-        const collection = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation');
-        const models = collection?.models ?? [];
-        if (models.length === 0) return 0;
+    getTotalResources() {
+        const polis_list = this.generateList();
+        let total = { wood: 0, stone: 0, iron: 0, storage: 0 };
+        for (const town_id of polis_list) {
+            const town = uw.ITowns.getTown(town_id);
+            const { wood, stone, iron, storage } = town.resources();
+            total.wood += wood;
+            total.stone += stone;
+            total.iron += iron;
+            total.storage += storage;
+        }
+        return total;
+    }
 
+    getNextCollection() {
+        const { models } = uw.MM.getCollections().FarmTownPlayerRelation[0];
         const lootCounts = {};
         for (const model of models) {
             const { lootable_at } = model.attributes;
             lootCounts[lootable_at] = (lootCounts[lootable_at] || 0) + 1;
         }
-
-        let maxLootableTime = 0, maxValue = 0;
+        let maxLootableTime = 0;
+        let maxValue = 0;
         for (const lootableTime in lootCounts) {
             const value = lootCounts[lootableTime];
-            if (value > maxValue) {
-                maxLootableTime = parseInt(lootableTime, 10) || 0;
-                maxValue = value;
-            }
+            if (value < maxValue) continue;
+            maxLootableTime = parseInt(lootableTime);
+            maxValue = value;
         }
         const seconds = maxLootableTime - Math.floor(Date.now() / 1000);
         return seconds > 0 ? seconds * 1000 : 0;
-    };
+    }
 
-    /* =========================================================
-       LOOP PRINCIPAL
-       ========================================================= */
-    updateTimer = () => {
+    updateTimer() {
         const currentTime = Date.now();
         this.timer -= currentTime - this.lastTime;
         this.lastTime = currentTime;
-        this.$count.text(this.formatTime(Math.max(this.timer, 0) / 1000));
-        this.updateStats();
-    };
+        const displayTime = Math.max(0, Math.ceil(this.timer / 1000));
+        this.$timer.text(this.formatTime(displayTime));
+    }
 
-    main = async () => {
-        if (!this.active) return;
+    formatTime(seconds) {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
 
-        if (uw.$('.botcheck').length || $('#recaptcha_window').length) {
-            if (!this._captchaLogged) { this._captchaLogged = true; this.log('Captcha ativo — farm em pausa', 'error'); }
-            return;
-        }
-        this._captchaLogged = false;
-
-        try {
-            this.updateTimer();
-            if (this._claiming) return;
-
-            if (this.timer < 30000) {
-                const next_collection = this.getNextCollection();
-                if (next_collection && this.timer < next_collection) {
-                    this.timer = next_collection + Math.floor(Math.random() * 20000) + 10000;
-                    return;
-                }
-            }
-
-            if (this.timer >= 1) return;
-
-            this._claiming = true;
-            this.polis_list = this.generateList();
-            await this.claim();
-
-            const next_collection = this.getNextCollection();
-            const rand = Math.floor(Math.random() * 20000) + 10000;
-            this.timer = this.timing + rand;
-            if (next_collection && this.timer < next_collection) this.timer = next_collection + rand;
-            this.lastTime = Date.now();
-            this._farmsCached = 0;
-            this.updateButtons();
-        } catch (e) {
-            this.console.log('[AutoFarm] Erro no main(): ' + (e && e.message ? e.message : e));
-            this.log('Erro no ciclo: ' + (e && e.message ? e.message : e), 'error');
-        } finally {
-            this._claiming = false;
-        }
-    };
-
-    forceFarm = async () => {
-        if (this._claiming) { this.log('Já existe uma coleta em curso...', 'warning'); return; }
-        this._claiming = true;
-        this.log('Coleta manual iniciada...', 'info');
-        try {
-            this.polis_list = this.generateList();
-            await this.claim();
-            const rand = Math.floor(Math.random() * 20000) + 10000;
-            this.timer = this.timing + rand;
-            this.lastTime = Date.now();
-            this._farmsCached = 0;
-        } catch (e) {
-            this.log('Erro na coleta manual: ' + (e && e.message ? e.message : e), 'error');
-        } finally {
-            this._claiming = false;
-        }
-        this.updateButtons();
-    };
-
-    /* =========================================================
-       CLAIM METHODS
-       ========================================================= */
-    claimSingle = async (town_id, farm_town_id, relation_id, option) => {
-        const data = {
-            model_url: 'FarmTownPlayerRelation/' + relation_id,
-            action_name: 'claim',
-            arguments: { farm_town_id: farm_town_id, type: 'resources', option: option || 1 },
-            town_id: town_id,
-        };
-        try { await this.ajaxPostWithTimeout('frontend_bridge', 'execute', data); } 
-        catch (e) { this.console.log('[AutoFarm] Erro claimSingle: ' + e.message); }
-    };
-
-    claimMultiple = async (polis_list, base, boost) => {
-        const town_id = uw.ITowns.getCurrentTown().id;
-        const data = { towns: polis_list, time_option_base: base, time_option_booty: boost, claim_factor: 'normal', town_id: town_id, nl_init: true };
-        await this.ajaxPostWithTimeout('farm_town_overviews', 'claim_loads_multiple', data, 90000);
-    };
-
-    claimMultipleBatched = async (polis_list, base, boost) => {
-        const BATCH_SIZE = 20;
-        for (let i = 0; i < polis_list.length; i += BATCH_SIZE) {
-            const batch = polis_list.slice(i, i + BATCH_SIZE);
-            await this.claimMultiple(batch, base, boost);
-            if (i + BATCH_SIZE < polis_list.length) await this.sleep(2000, 500);
-        }
-    };
-
-    fakeOpening = async () => {
-        const town_id = uw.ITowns.getCurrentTown().id;
-        await this.ajaxGetWithTimeout('farm_town_overviews', 'index', { town_id: town_id, nl_init: true });
-        await this.sleep(10);
-        await this.fakeUpdate();
-    };
-
-    fakeSelectAll = async () => {
-        const town_id = uw.ITowns.getCurrentTown().id;
-        await this.ajaxGetWithTimeout('farm_town_overviews', 'get_farm_towns_from_multiple_towns', { town_ids: this.polis_list, town_id: town_id, nl_init: true });
-    };
-
-    fakeUpdate = async () => {
-        const town = uw.ITowns.getCurrentTown();
-        const res = town.getResearches().attributes;
-        const bld = town.getBuildings().attributes;
-        await this.ajaxGetWithTimeout('farm_town_overviews', 'get_farm_towns_for_town', {
-            island_x: town.getIslandCoordinateX(), island_y: town.getIslandCoordinateY(), current_town_id: town.id,
-            booty_researched: res.booty ? 1 : 0, diplomacy_researched: res.diplomacy ? 1 : 0, trade_office: bld.trade_office ? 1 : 0, town_id: town.id, nl_init: true
-        });
-    };
-
-    fakeGuiUpdate = async () => {
-        uw.$(".toolbar_button.premium .icon").trigger('mouseenter'); await this.sleep(1019, 127);
-        uw.$(".farm_town_overview a").trigger('click'); await this.sleep(1156, 165);
-        uw.$(".checkbox.select_all").trigger("click"); await this.sleep(1036, 135);
-        uw.$("#fto_claim_button").trigger("click"); await this.sleep(1036, 135);
-        const el = uw.$(".confirmation .btn_confirm.button_new");
-        if (el.length) { el.trigger("click"); await this.sleep(1036, 135); }
-        uw.$(".icon_right.icon_type_speed.ui-dialog-titlebar-close").trigger("click");
-    };
-
-    claim = async () => {
+    async claim() {
         const isCaptainActive = uw.GameDataPremium.isAdvisorActivated('captain');
-        const polis_list = this.polis_list;
-
-        if (polis_list.length === 0) {
-            this.log(this.percent > 0 ? 'Nenhuma cidade atinge o filtro do armazém.' : 'Nenhuma cidade encontrada!', 'warning');
-            return;
-        }
-
-        this.log('A coletar ' + polis_list.length + ' cidades (' + (isCaptainActive ? 'Capitão' : 'individual') + ')...', 'info');
+        this.polis_list = this.generateList();
 
         if (isCaptainActive && !this.gui) {
-            try {
-                await this.fakeOpening(); await this.sleep(2000, 500);
-                await this.fakeSelectAll(); await this.sleep(2000, 500);
-                if (this.timing <= 600000) await this.claimMultipleBatched(polis_list, 600, 2400);
-                else await this.claimMultipleBatched(polis_list, 2400, 10800);
-                await this.fakeUpdate();
-                setTimeout(() => uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers(), 2000);
-                this.log('Coleta concluída (AJAX)', 'success');
-                return;
-            } catch (e) {
-                this.log('AJAX falhou, a tentar GUI...', 'warning');
-                try {
-                    await this.fakeGuiUpdate();
-                    this.log('Coleta concluída (GUI)', 'success');
-                    return;
-                } catch (e2) {
-                    this.log('GUI falhou, coleta individual...', 'warning');
-                }
+            await this.fakeOpening();
+            await this.sleep(Math.random() * 2000 + 1000);
+            await this.fakeSelectAll();
+            await this.sleep(Math.random() * 2000 + 1000);
+            if (this.timing <= 600000) {
+                await this.claimMultiple(300, 600);
+            } else {
+                await this.claimMultiple(1200, 2400);
             }
-        } else if (isCaptainActive && this.gui) {
-            try {
-                await this.fakeGuiUpdate();
-                this.log('Coleta concluída (GUI)', 'success');
-                return;
-            } catch (e) {
-                this.log('GUI falhou, coleta individual...', 'warning');
-            }
+            await this.fakeUpdate();
+            setTimeout(() => uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers(), 2000);
+            return;
         }
 
-        await this._claimOneByOne(polis_list);
-        this.log('Coleta individual concluída', 'success');
-    };
+        if (isCaptainActive && this.gui) {
+            await this.fakeGuiUpdate();
+            return;
+        }
 
-    _claimOneByOne = async (polis_list) => {
         let max = 60;
         const { models: player_relation_models } = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation');
         const { models: farm_town_models } = uw.MM.getOnlyCollectionByName('FarmTown');
         const now = Math.floor(Date.now() / 1000);
 
-        for (let town_id of polis_list) {
-            let town = uw.ITowns.towns[town_id] || uw.ITowns.getTown(town_id);
-            if (!town) continue;
-            let x, y;
-            try { x = town.getIslandCoordinateX(); y = town.getIslandCoordinateY(); } catch (e) { continue; }
+        for (const town_id of this.polis_list) {
+            const town = uw.ITowns.towns[town_id];
+            const x = town.getIslandCoordinateX();
+            const y = town.getIslandCoordinateY();
 
-            for (let farm_town of farm_town_models) {
-                if (farm_town.attributes.island_x != x || farm_town.attributes.island_y != y) continue;
-                for (let relation of player_relation_models) {
+            for (const farm_town of farm_town_models) {
+                if (farm_town.attributes.island_x != x) continue;
+                if (farm_town.attributes.island_y != y) continue;
+
+                for (const relation of player_relation_models) {
                     if (farm_town.attributes.id != relation.attributes.farm_town_id) continue;
                     if (relation.attributes.relation_status !== 1) continue;
                     if (relation.attributes.lootable_at !== null && now < relation.attributes.lootable_at) continue;
 
-                    await this.claimSingle(town_id, relation.attributes.farm_town_id, relation.id, Math.ceil(this.timing / 600000));
+                    this.claimSingle(town_id, relation.attributes.farm_town_id, relation.attributes.id, Math.ceil(this.timing / 600000));
                     await this.sleep(500);
-                    if (!max) break; else max -= 1;
+                    if (!max) return;
+                    max -= 1;
                 }
             }
-            if (!max) break;
         }
         setTimeout(() => uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers(), 2000);
+    }
+
+    claimSingle = (town_id, farm_town_id, relation_id, option = 1) => {
+        const data = {
+            model_url: `FarmTownPlayerRelation/${relation_id}`,
+            action_name: 'claim',
+            arguments: { farm_town_id: farm_town_id, type: 'resources', option: option },
+            town_id: town_id,
+        };
+        uw.gpAjax.ajaxPost('frontend_bridge', 'execute', data);
     };
 
-    getTotalResources = () => {
-        const polis_list = this.generateList();
-        let total = { wood: 0, stone: 0, iron: 0, storage: 0 };
-        for (let town_id of polis_list) {
-            const { wood, stone, iron, storage } = uw.ITowns.getTown(town_id).resources();
-            total.wood += wood; total.stone += stone; total.iron += iron; total.storage += storage;
-        }
-        return total;
+    claimMultiple = (base = 300, boost = 600) => {
+        return new Promise((resolve) => {
+            const data = { towns: this.polis_list, time_option_base: base, time_option_booty: boost, claim_factor: 'normal' };
+            uw.gpAjax.ajaxPost('farm_town_overviews', 'claim_loads_multiple', data, false, () => resolve());
+        });
     };
+
+    fakeOpening = () => {
+        return new Promise((resolve) => {
+            uw.gpAjax.ajaxGet('farm_town_overviews', 'index', {}, false, async () => {
+                await this.sleep(10);
+                await this.fakeUpdate();
+                resolve();
+            });
+        });
+    };
+
+    fakeSelectAll = () => {
+        return new Promise((resolve) => {
+            const data = { town_ids: this.polis_list };
+            uw.gpAjax.ajaxGet('farm_town_overviews', 'get_farm_towns_from_multiple_towns', data, false, () => resolve());
+        });
+    };
+
+    fakeUpdate = () => {
+        return new Promise((resolve) => {
+            const town = uw.ITowns.getCurrentTown();
+            const { attributes: booty } = town.getResearches();
+            const { attributes: trade_office } = town.getBuildings();
+            const data = {
+                island_x: town.getIslandCoordinateX(),
+                island_y: town.getIslandCoordinateY(),
+                current_town_id: town.id,
+                booty_researched: booty ? 1 : 0,
+                diplomacy_researched: '',
+                trade_office: trade_office ? 1 : 0,
+            };
+            uw.gpAjax.ajaxGet('farm_town_overviews', 'get_farm_towns_for_town', data, false, () => resolve());
+        });
+    };
+
+    fakeGuiUpdate = () => {
+        return new Promise(async (resolve) => {
+            $(".toolbar_button.premium .icon").trigger('mouseenter');
+            await this.sleep(1019.39, 127.54);
+            $(".farm_town_overview a").trigger('click');
+            await this.sleep(1156.65, 165.62);
+            $(".checkbox.select_all").trigger("click");
+            await this.sleep(1036.20, 135.69);
+            $("#fto_claim_button").trigger("click");
+            await this.sleep(1036.20, 135.69);
+            const el = $(".confirmation .btn_confirm.button_new");
+            if (el.length) {
+                el.trigger("click");
+                await this.sleep(1036.20, 135.69);
+            }
+            $(".icon_right.icon_type_speed.ui-dialog-titlebar-close").trigger("click");
+            resolve();
+        });
+    };
+
+    main = async () => {
+        const next_collection = this.getNextCollection();
+        if (next_collection && (this.timer > next_collection + 60 * 1000 || this.timer < next_collection)) {
+            this.timer = next_collection + Math.floor(Math.random() * 20000) + 10000;
+        }
+
+        if (this.timer < 1) {
+            this.polis_list = this.generateList();
+            clearInterval(this.intervalId);
+            this.intervalId = null;
+            await this.claim();
+            this.intervalId = setInterval(this.main, 1000);
+            const rand = Math.floor(Math.random() * 20000) + 10000;
+            this.timer = this.timing + rand;
+            if (this.timer < next_collection) {
+                this.timer = next_collection + rand;
+            }
+        }
+        this.updateTimer();
+        this.updateUI();
+    };
+
+    sleep = (ms, stdDev) => {
+        if (typeof stdDev === 'undefined') {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+        const mean = ms;
+        let u = 0, v = 0;
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
+        let num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+        num = num * stdDev + mean;
+        return new Promise(resolve => setTimeout(resolve, num));
+    };
+
+    updateUI() {
+        const seconds = Math.max(0, Math.ceil(this.timer / 1000));
+        this.$timer.text(this.formatTime(seconds));
+
+        this.$status.removeClass('on off');
+        if (this.active) {
+            this.$status.addClass('on');
+            this.$icon.addClass('active');
+        } else {
+            this.$status.addClass('off');
+            this.$icon.removeClass('active');
+        }
+
+        this.$timer.removeClass('warning danger');
+        if (this.active) {
+            if (this.timer < 10000) this.$timer.addClass('danger');
+            else if (this.timer < 30000) this.$timer.addClass('warning');
+        }
+        this.updateDropdownUI();
+    }
+
+    updateDropdownUI() {
+        this.$dropdown.find('#af-time-group .af-btn').removeClass('active');
+        this.$dropdown.find('#af-time-group .af-btn').each((i, el) => {
+            if (parseInt($(el).data('time')) * 60000 === this.timing) $(el).addClass('active');
+        });
+
+        this.$dropdown.find('#af-percent-group .af-btn').removeClass('active');
+        this.$dropdown.find('#af-percent-group .af-btn').each((i, el) => {
+            if (parseFloat($(el).data('percent')) === this.percent) $(el).addClass('active');
+        });
+
+        this.$dropdown.find('#af-gui-group .af-btn').removeClass('active');
+        this.$dropdown.find('#af-gui-group .af-btn').each((i, el) => {
+            if (parseInt($(el).data('gui')) === (this.gui ? 1 : 0)) $(el).addClass('active');
+        });
+
+        const $startBtn = this.$dropdown.find('#af-start-btn');
+        const $stopBtn = this.$dropdown.find('#af-stop-btn');
+
+        if (this.active) {
+            $startBtn.addClass('active').text('▶ Rodando...');
+            $stopBtn.show();
+        } else {
+            $startBtn.removeClass('active').text('▶ Iniciar');
+            $stopBtn.hide();
+        }
+
+        this.$dropdown.find('#af-status-text').text(this.active ? '✅ Ativo' : '⏸️ Parado');
+        const seconds = Math.max(0, Math.ceil(this.timer / 1000));
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        this.$dropdown.find('#af-timer-display').text(`${mins}min ${secs}s`);
+        this.$dropdown.find('#af-farms-count').text(this.polis_list?.length || 0);
+        const nextCollect = this.timer > 0 ? `${Math.floor(this.timer/60000)}min ${Math.floor((this.timer%60000)/1000)}s` : 'Agora!';
+        this.$dropdown.find('#af-next-collect').text(nextCollect);
+    }
+
+    log(message, type = 'info') {
+        const timestamp = new Date().toLocaleTimeString();
+        const $log = this.$dropdown.find('#af-log');
+        const $entry = $(`<div class="log-entry log-${type}">[${timestamp}] ${message}</div>`);
+        $log.prepend($entry);
+        while ($log.children().length > 20) {
+            $log.children().last().remove();
+        }
+    }
+
+    showNotification(message, type = 'success') {
+        const $notif = $(`<div class="af-notification ${type}">${message}</div>`);
+        $('body').append($notif);
+        setTimeout(() => {
+            $notif.addClass('fade-out');
+            setTimeout(() => $notif.remove(), 500);
+        }, 3000);
+    }
 }
