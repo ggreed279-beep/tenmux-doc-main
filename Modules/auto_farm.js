@@ -1,3 +1,14 @@
+/* =========================================================
+   AutoFarm (versao melhorada)
+   - Base: script original (MultUtil / ModernBot)
+   - Adicionado: botao LIGAR/DESLIGAR, notificacoes, log,
+     painel de estatisticas, timer formatado mm:ss
+   - Mantidos os time_option validados pelo F12
+     (600 / 2400 / 10800 / 28800) — NUNCA 300 / 1200
+   - Mantido o filtro de percentagem de armazem
+     (o script "extra" tinha esse filtro comentado = bug)
+   ========================================================= */
+
 var AutoFarm = class extends MultUtil {
     constructor(c, s) {
         super(c, s);
@@ -14,19 +25,108 @@ var AutoFarm = class extends MultUtil {
         this.$count = $count;
         this.$activity.on('click', this.toggle);
 
+        this.timer = 0;
+        this.lastTime = Date.now();
+        this.polis_list = [];
+
+        this.injectStyles();
         this.createDropdown();
         this.updateButtons();
 
-        this.timer = 0;
-        this.lastTime = Date.now();
         if (this.active) this.active = this.createGuardedInterval(this.main, 5000);
+        this.updateButtons();
     }
+
+    /* =========================================================
+       ESTILOS (notificacoes, log, estatisticas)
+       ========================================================= */
+    injectStyles = () => {
+        if (uw.document.getElementById('mult_af_styles')) return;
+        const css = `
+            .mult_af_stats { background: rgba(0,0,0,0.35); border: 1px solid #3d2b1f; border-radius: 6px; padding: 6px 8px; margin: 4px 0; font-size: 11px; color: #d4c5a0; }
+            .mult_af_stats .row { display: flex; justify-content: space-between; margin: 1px 0; }
+            .mult_af_stats .val { color: #ffd700; font-weight: bold; }
+            .mult_af_log { max-height: 70px; overflow-y: auto; background: rgba(0,0,0,0.4); border: 1px solid #2a1a12; border-radius: 4px; padding: 4px 6px; margin-top: 6px; font-size: 10px; color: #8a8a7a; }
+            .mult_af_log_success { color: #8bc34a; }
+            .mult_af_log_error { color: #ef5350; }
+            .mult_af_log_info { color: #64b5f6; }
+            .mult_af_log_warning { color: #ffb74d; }
+            .mult_af_notif { position: fixed; top: 80px; right: 20px; background: rgba(0,0,0,0.85); color: #fff; padding: 10px 18px; border-radius: 8px; border-left: 4px solid #4CAF50; box-shadow: 0 4px 20px rgba(0,0,0,0.5); z-index: 99999; font-size: 13px; animation: mult_af_slide 0.4s ease-out; }
+            @keyframes mult_af_slide { from { transform: translateX(80px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+            .mult_af_fade { opacity: 0; transition: opacity 0.5s; }
+        `;
+        uw.$('<style id="mult_af_styles"></style>').text(css).appendTo('head');
+    };
+
+    /* =========================================================
+       HELPERS DE UI (novos)
+       ========================================================= */
+
+    /* Formata segundos como mm:ss */
+    formatTime = (totalSeconds) => {
+        const m = Math.floor(totalSeconds / 60);
+        const s = totalSeconds % 60;
+        return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    };
+
+    /* Notificacao tipo toast no canto superior direito */
+    notify = (message, type) => {
+        const colors = { on: '#4CAF50', off: '#f44336', info: '#64b5f6', warning: '#ffb74d' };
+        const color = colors[type] || colors.info;
+        const $n = uw.$('<div class="mult_af_notif"></div>').text(message).css('border-left-color', color);
+        uw.$('body').append($n);
+        setTimeout(() => {
+            $n.addClass('mult_af_fade');
+            setTimeout(() => $n.remove(), 500);
+        }, 3000);
+    };
+
+    /* Entrada no log do dropdown (max 20 linhas) */
+    log = (message, type) => {
+        if (!this.$log || !this.$log.length) return;
+        const time = new Date().toLocaleTimeString();
+        const $entry = uw.$('<div></div>').addClass('mult_af_log_' + (type || 'info')).text('[' + time + '] ' + message);
+        this.$log.prepend($entry);
+        while (this.$log.children().length > 20) this.$log.children().last().remove();
+    };
+
+    /* Atualiza o painel de estatisticas */
+    updateStats = () => {
+        if (!this.$statStatus) return;
+        const secs = Math.max(0, Math.round(this.timer / 1000));
+        this.$statStatus.text(this.active ? 'Ativo' : 'Parado').css('color', this.active ? '#1aff1a' : '#ff5555');
+        this.$statTimer.text(this.formatTime(secs));
+        let farms = this.polis_list.length;
+        try { farms = this.generateList().length; } catch (e) { /* MM ainda nao pronto */ }
+        this.$statFarms.text(farms);
+        this.$statNext.text(this.active ? (this.timer > 0 ? this.formatTime(secs) : 'Agora!') : '--');
+    };
 
     /* Create the dropdown menu */
     createDropdown = () => {
         this.$content = uw.$("<div></div>");
         this.$title = uw.$("<p></p>").text(this.t('af_title')).css({ "text-align": "center", "margin": "2px", "font-weight": "bold", "font-size": "16px" });
         this.$content.append(this.$title);
+
+        /* --- NOVO: botao LIGAR / DESLIGAR --- */
+        this.$power = uw.$("<p></p>").text('Auto-Farm').css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
+        this.$btnOn = this.createButton("mult_farm_on", "▶ LIGAR", this.togglePower).css({ "width": "110px" });
+        this.$btnOff = this.createButton("mult_farm_off", "⏹ DESLIGAR", this.togglePower).css({ "width": "110px" });
+        this.$content.append(this.$power, this.$btnOn, this.$btnOff);
+
+        /* --- NOVO: painel de estatisticas --- */
+        this.$statStatus = uw.$('<span class="val"></span>');
+        this.$statTimer = uw.$('<span class="val"></span>');
+        this.$statFarms = uw.$('<span class="val"></span>');
+        this.$statNext = uw.$('<span class="val"></span>');
+        const row = (label, $val) => uw.$('<div class="row"></div>').append(uw.$('<span></span>').text(label), $val);
+        this.$stats = uw.$('<div class="mult_af_stats"></div>').append(
+            row('Estado', this.$statStatus),
+            row('Timer', this.$statTimer),
+            row('Cidades', this.$statFarms),
+            row('Próxima', this.$statNext)
+        );
+        this.$content.append(this.$stats);
 
         this.$duration = uw.$("<p></p>").text(this.t('af_duration')).css({ "text-align": "left", "margin": "2px", "font-weight": "bold" });
         this.$button5 = this.createButton("mult_farm_5", "5 min", this.toggleDuration);
@@ -44,6 +144,10 @@ var AutoFarm = class extends MultUtil {
         this.$guiOn = this.createButton("mult_farm_gui_on", "ON", this.toggleGui);
         this.$guiOff = this.createButton("mult_farm_gui_off", "OFF", this.toggleGui);
         this.$content.append(this.$gui, this.$guiOn, this.$guiOff);
+
+        /* --- NOVO: log de eventos --- */
+        this.$log = uw.$('<div class="mult_af_log"></div>');
+        this.$content.append(this.$log);
 
         this.$popup = this.createPopup(423, 250, 170, this.$content);
         this.$popup.css({ 'height': 'auto', 'min-height': '170px' });
@@ -79,6 +183,8 @@ var AutoFarm = class extends MultUtil {
                 setTimeout(close, 50);
             }
         });
+
+        this.log('Sistema pronto', 'info');
     }
 
     /* Update the buttons */
@@ -98,6 +204,12 @@ var AutoFarm = class extends MultUtil {
         if (this.percent == 0.9) this.$button90.removeClass('disabled');
         if (this.percent == 1) this.$button100.removeClass('disabled');
 
+        /* NOVO: estado dos botoes LIGAR/DESLIGAR */
+        this.$btnOn.addClass('disabled');
+        this.$btnOff.addClass('disabled');
+        if (this.active) this.$btnOn.removeClass('disabled');
+        else this.$btnOff.removeClass('disabled');
+
         if (!this.active) {
             this.$count.css('color', "red");
             this.$count.text("");
@@ -107,6 +219,8 @@ var AutoFarm = class extends MultUtil {
         this.$guiOff.addClass('disabled');
         if (this.gui) this.$guiOn.removeClass('disabled');
         else this.$guiOff.removeClass('disabled');
+
+        this.updateStats();
     }
 
     toggleDuration = (event) => {
@@ -117,6 +231,7 @@ var AutoFarm = class extends MultUtil {
         if (id == "mult_farm_20") this.timing = 1200000;
 
         this.storage.save('af_level', this.timing);
+        this.log('Intervalo: ' + (this.timing / 60000) + ' min', 'info');
         this.updateButtons();
     }
 
@@ -128,6 +243,7 @@ var AutoFarm = class extends MultUtil {
         if (id == "mult_farm_100") this.percent = 1;
 
         this.storage.save('af_percent', this.percent);
+        this.log('Armazém: ' + (this.percent * 100) + '%', 'info');
         this.updateButtons();
     }
 
@@ -138,7 +254,15 @@ var AutoFarm = class extends MultUtil {
         if (id == "mult_farm_gui_off") this.gui = false;
 
         this.storage.save('af_gui', this.gui);
+        this.log('Modo GUI: ' + (this.gui ? 'ON' : 'OFF'), 'info');
         this.updateButtons();
+    }
+
+    /* NOVO: handler dos botoes LIGAR/DESLIGAR */
+    togglePower = (event) => {
+        const { id } = event.currentTarget;
+        if (id === 'mult_farm_on' && !this.active) this.toggle();
+        if (id === 'mult_farm_off' && this.active) this.toggle();
     }
 
     /* Generate the list containing 1 polis per island */
@@ -172,13 +296,17 @@ var AutoFarm = class extends MultUtil {
         if (this.active) {
             clearInterval(this.active);
             this.active = null;
-            this.updateButtons();
+            this.log('Auto-Farm parado', 'warning');
+            this.notify('Auto-Farm parado', 'off');
         } else {
             this.updateTimer();
             this.active = this.createGuardedInterval(this.main, 5000);
+            this.log('Auto-Farm iniciado', 'success');
+            this.notify('Auto-Farm iniciado!', 'on');
         }
 
         this.storage.save('af_active', !!this.active);
+        this.updateButtons();
     };
 
     /* Return the time before the next collection */
@@ -198,7 +326,7 @@ var AutoFarm = class extends MultUtil {
         for (const lootableTime in lootCounts) {
             const value = lootCounts[lootableTime];
             if (value > maxValue) {
-                maxLootableTime = lootableTime;
+                maxLootableTime = parseInt(lootableTime, 10);
                 maxValue = value;
             }
         }
@@ -214,8 +342,10 @@ var AutoFarm = class extends MultUtil {
         this.lastTime = currentTime;
 
         const isCaptainActive = uw.GameDataPremium.isAdvisorActivated('captain');
-        this.$count.text(Math.round(Math.max(this.timer, 0) / 1000));
+        const secs = Math.max(0, Math.round(this.timer / 1000));
+        this.$count.text(this.formatTime(secs));
         this.$count.css('color', isCaptainActive ? "#1aff1a" : "yellow");
+        this.updateStats();
     };
 
     /* Main loop */
@@ -243,7 +373,9 @@ var AutoFarm = class extends MultUtil {
 
             this.updateTimer();
         } catch (e) {
-            this.console.log('[AutoFarm] Erro no main(): ' + (e && e.message ? e.message : e));
+            const msg = '[AutoFarm] Erro no main(): ' + (e && e.message ? e.message : e);
+            this.console.log(msg);
+            this.log(msg, 'error');
             if (!this.active) this.active = this.createGuardedInterval(this.main, 5000);
         }
     };
@@ -419,6 +551,13 @@ var AutoFarm = class extends MultUtil {
         /* Reutilizamos this.polis_list que ja foi setada no main() */
         const polis_list = this.polis_list;
 
+        if (polis_list.length === 0) {
+            this.log('Nenhuma cidade acima do limite de armazém', 'warning');
+            return;
+        }
+
+        this.log('A coletar ' + polis_list.length + ' cidades...', 'info');
+
         if (isCaptainActive && !this.gui) {
             /* Caminho rapido AJAX (Captain ativo, GUI desligado):
                Dividido em lotes de 20 via claimMultipleBatched para
@@ -442,27 +581,38 @@ var AutoFarm = class extends MultUtil {
 
                 await this.fakeUpdate();
                 setTimeout(function() { uw.WMap.removeFarmTownLootCooldownIconAndRefreshLootTimers(); }, 2000);
+                this.log('Coleta concluída (AJAX)', 'success');
+                this.notify('Recursos coletados!', 'on');
                 return;
             } catch (e) {
                 this.console.log('[AutoFarm] Caminho AJAX direto falhou (' + (e && e.message ? e.message : e) + '), tentando via GUI...');
+                this.log('Caminho AJAX falhou, a tentar GUI...', 'warning');
                 try {
                     await this.fakeGuiUpdate();
+                    this.log('Coleta concluída (GUI)', 'success');
+                    this.notify('Recursos coletados!', 'on');
                     return;
                 } catch (e2) {
                     this.console.log('[AutoFarm] Caminho GUI tambem falhou (' + (e2 && e2.message ? e2.message : e2) + '), usando coleta individual.');
+                    this.log('GUI falhou, coleta individual...', 'warning');
                 }
             }
         } else if (isCaptainActive && this.gui) {
             try {
                 await this.fakeGuiUpdate();
+                this.log('Coleta concluída (GUI)', 'success');
+                this.notify('Recursos coletados!', 'on');
                 return;
             } catch (e) {
                 this.console.log('[AutoFarm] Modo GUI falhou (' + (e && e.message ? e.message : e) + '), usando coleta individual.');
+                this.log('Modo GUI falhou, coleta individual...', 'warning');
             }
         }
 
         /* Fallback: coleta uma por uma (sem Captain ou apos falhas) */
         await this._claimOneByOne(polis_list);
+        this.log('Coleta individual concluída', 'success');
+        this.notify('Recursos coletados!', 'on');
     };
 
     /* Coleta cidade a cidade, respeitando limite de 60 por ciclo. */
