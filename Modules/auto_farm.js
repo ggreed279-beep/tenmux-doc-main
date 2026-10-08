@@ -21,6 +21,7 @@ class AutoFarm extends BaseUtilClass {
         this.percent = parseFloat(getVal('af_percent', '1'));
         this.active = getVal('af_active', false);
         this.gui = getVal('af_gui', false);
+        this.minimized = getVal('af_minimized', false);
 
         this.timer = 0;
         this.lastTime = Date.now();
@@ -40,7 +41,7 @@ class AutoFarm extends BaseUtilClass {
     injectStyles() {
         if (document.getElementById('af-custom-styles')) return;
         const styles = `
-            .af-container { position: absolute; top: 3px; right: 120px; z-index: 999; }
+            .af-container { position: absolute; top: 3px; right: 120px; z-index: 999; transition: all 0.3s ease; }
             .af-wrapper { display: flex; align-items: center; background: rgba(0, 0, 0, 0.7); border-radius: 8px; padding: 3px 10px; gap: 8px; border: 1px solid rgba(255, 215, 0, 0.2); backdrop-filter: blur(4px); cursor: pointer; }
             .af-wrapper:hover { border-color: rgba(255, 215, 0, 0.5); }
             .af-icon { width: 28px; height: 28px; background: url(https://gpit.innogamescdn.com/images/game/premium_features/feature_icons_2.08.png) no-repeat 0 -240px; background-size: 28px; border-radius: 4px; transition: all 0.3s; }
@@ -53,6 +54,13 @@ class AutoFarm extends BaseUtilClass {
             .af-status { width: 10px; height: 10px; border-radius: 50%; display: inline-block; transition: all 0.3s; }
             .af-status.on { background: #4CAF50; box-shadow: 0 0 10px #4CAF50; }
             .af-status.off { background: #f44336; box-shadow: 0 0 10px #f44336; }
+            
+            /* Novos estilos para Minimizar e Fechar */
+            .af-controls { display: flex; gap: 4px; margin-left: auto; }
+            .af-ctrl-btn { width: 22px; height: 22px; border-radius: 4px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; transition: all 0.2s; font-weight: bold; }
+            .af-ctrl-btn:hover { background: rgba(255,255,255,0.25); transform: scale(1.1); }
+            .af-ctrl-btn.close:hover { background: #f44336; border-color: #f44336; color: #fff; }
+            
             .af-dropdown { display: none; position: absolute; top: 40px; right: 0; background: linear-gradient(180deg, #2c1810 0%, #1a0f0a 100%); border: 1px solid #8b7355; border-radius: 10px; padding: 15px; min-width: 260px; box-shadow: 0 8px 32px rgba(0,0,0,0.8); z-index: 1000; color: #d4c5a0; }
             .af-dropdown.show { display: block; animation: af-slideDown 0.3s ease-out; }
             @keyframes af-slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
@@ -77,6 +85,10 @@ class AutoFarm extends BaseUtilClass {
             @keyframes af-slideRight { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
             .af-notification.fade-out { animation: af-fadeOut 0.5s ease-in forwards; }
             @keyframes af-fadeOut { to { opacity: 0; transform: translateX(50px); } }
+            
+            /* Botão de restaurar quando fechado */
+            #af-restore-btn { position: fixed; bottom: 20px; right: 20px; z-index: 9999; background: linear-gradient(180deg, #4a7a3a, #2d5a1d); color: #fff; padding: 10px 16px; border-radius: 20px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.4); font-weight: bold; font-size: 13px; border: 1px solid #6a9a5a; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
+            #af-restore-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4); }
         `;
         const styleElem = document.createElement('style');
         styleElem.id = 'af-custom-styles';
@@ -91,9 +103,16 @@ class AutoFarm extends BaseUtilClass {
         this.$icon.on('click', () => this.toggle());
         this.$timer = $('<span class="af-timer">00:00</span>');
         this.$status = $('<span class="af-status off"></span>');
+        
+        // Botões de Minimizar e Fechar
+        this.$controls = $('<div class="af-controls"></div>');
+        this.$minimizeBtn = $('<div class="af-ctrl-btn" title="Minimizar">▾</div>');
+        this.$closeBtn = $('<div class="af-ctrl-btn close" title="Fechar">✕</div>');
+        this.$controls.append(this.$minimizeBtn, this.$closeBtn);
+
         this.createDropdown();
 
-        this.$wrapper.append(this.$status, this.$icon, this.$timer);
+        this.$wrapper.append(this.$status, this.$icon, this.$timer, this.$controls);
         this.$container.append(this.$wrapper, this.$dropdown);
 
         const $uiBox = $('#ui_box');
@@ -103,15 +122,58 @@ class AutoFarm extends BaseUtilClass {
             setTimeout(() => this.createUI(), 500);
             return;
         }
+        
         this.setupDropdownEvents();
+        this.setupControlEvents();
+        
+        // Aplicar estado minimizado salvo
+        if (this.minimized) {
+            this.$dropdown.removeClass('show');
+            this.$minimizeBtn.text('▴');
+        }
+    }
+
+    setupControlEvents() {
+        // Minimizar
+        this.$minimizeBtn.on('click', (e) => {
+            e.stopPropagation();
+            this.minimized = !this.minimized;
+            this.setVal('af_minimized', this.minimized);
+            if (this.minimized) {
+                this.$dropdown.removeClass('show');
+                this.$minimizeBtn.text('▴').attr('title', 'Maximizar');
+            } else {
+                this.$minimizeBtn.text('▾').attr('title', 'Minimizar');
+            }
+        });
+
+        // Fechar
+        this.$closeBtn.on('click', (e) => {
+            e.stopPropagation();
+            this.$container.hide();
+            this.showRestoreButton();
+        });
+    }
+
+    showRestoreButton() {
+        if ($('#af-restore-btn').length) return;
+        $('body').append(`
+            <div id="af-restore-btn">
+                <span>🌾</span> Abrir Auto-Farm
+            </div>
+        `);
+        $('#af-restore-btn').on('click', () => {
+            this.$container.show();
+            $('#af-restore-btn').remove();
+        });
     }
 
     createDropdown() {
         this.$dropdown = $(`
             <div class="af-dropdown">
-                <div class="af-title">🌾 Auto-Farm</div>
+                <div class="af-title">🌾 Auto-Farm Anti-Deteção</div>
                 <div class="af-section">
-                    <label class="af-label">⏱️ Intervalo</label>
+                    <label class="af-label">⏱️ Intervalo Base</label>
                     <div class="af-btn-group" id="af-time-group">
                         <div class="af-btn" data-time="5">5min</div>
                         <div class="af-btn" data-time="10">10min</div>
@@ -144,7 +206,7 @@ class AutoFarm extends BaseUtilClass {
                     <div class="af-btn danger" id="af-stop-btn">⏹ Parar</div>
                 </div>
                 <div class="af-log" id="af-log">
-                    <div class="log-entry log-info">🔹 Sistema pronto</div>
+                    <div class="log-entry log-info">🔹 Sistema pronto com delays aleatórios</div>
                 </div>
             </div>
         `);
@@ -154,7 +216,7 @@ class AutoFarm extends BaseUtilClass {
             this.timing = time;
             this.setVal('af_timing', time.toString());
             this.updateUI();
-            this.log(`Intervalo: ${time/60000}min`, 'info');
+            this.log(`Intervalo base: ${time/60000}min`, 'info');
         });
 
         this.$dropdown.find('#af-percent-group .af-btn').on('click', (e) => {
@@ -180,8 +242,10 @@ class AutoFarm extends BaseUtilClass {
     setupDropdownEvents() {
         let hoverTimeout = null;
         this.$wrapper.on('mouseenter', () => {
-            clearTimeout(hoverTimeout);
-            this.$dropdown.addClass('show');
+            if (!this.minimized) {
+                clearTimeout(hoverTimeout);
+                this.$dropdown.addClass('show');
+            }
         });
         this.$wrapper.on('mouseleave', () => {
             hoverTimeout = setTimeout(() => {
@@ -209,7 +273,7 @@ class AutoFarm extends BaseUtilClass {
         this.setVal('af_active', true);
         this.updateTimer();
         this.intervalId = setInterval(() => this.main(), 1000);
-        this.log('🚀 Auto-Farm iniciado!', 'success');
+        this.log('🚀 Auto-Farm iniciado com delays aleatórios!', 'success');
         this.showNotification('Auto-Farm iniciado!');
         this.updateUI();
     }
@@ -424,8 +488,18 @@ class AutoFarm extends BaseUtilClass {
             this.polis_list = this.generateList();
             clearInterval(this.intervalId);
             this.intervalId = null;
+            
+            // 1. Faz a recolha
             await this.claim();
-            this.intervalId = setInterval(this.main, 1000);
+            
+            // 2. 🎯 NOVO: Delay aleatório APÓS a recolha para evitar deteção de padrões
+            // Espera entre 9 e 15 segundos (9000ms a 15000ms) antes de reiniciar o ciclo
+            const randomWait = Math.floor(Math.random() * (15000 - 9000 + 1)) + 9000;
+            this.log(`⏳ Aguardando ${randomWait/1000}s antes da próxima verificação...`, 'info');
+            await this.sleep(randomWait);
+            
+            // 3. Reinicia o ciclo
+            this.intervalId = setInterval(() => this.main(), 1000);
             const rand = Math.floor(Math.random() * 20000) + 10000;
             this.timer = this.timing + rand;
             if (this.timer < next_collection) {
