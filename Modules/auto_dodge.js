@@ -1,49 +1,84 @@
 // ══════════════════════════════════════════════════════════════════════════
-//  MODULE: AutoDodge Dual (Original + Seguro)
-//  Integração no MultBot com dois módulos independentes.
+//  MODULE: AutoDodge v2.3.0 (Dual Mode: Seguro / Agressivo)
+//  Compatível com MultBot. Menu interno para escolher o perfil.
 // ══════════════════════════════════════════════════════════════════════════
 
-// ───────────────────────────────────────────────────────────────────────────
-// MÓDULO 1: AUTO DODGE ORIGINAL (O teu código original, intacto)
-// ───────────────────────────────────────────────────────────────────────────
 var AutoDodge = class extends MultUtil {
-    VERSION = '2.0.1';
-    CONFIG = Object.freeze({
-        enabled: true,
-        returnOffsetMs: 1_000,
-        ncReturnOffsetMs: -100,
-        ncFallbackReturnOffsetMs: -1_000,
-        ncHighPrecisionUncertaintyMs: 75,
-        ncDurationToleranceMs: 11_000,
-        ncBaseTravelSeconds: 900,
-        ncDistanceFactor: 50,
-        ncSpeedModifiers: null,
-        militiaLeadMs: 1_000,
-        militiaLatencySafetyMs: 100,
-        militiaActiveMs: 3 * 60 * 60_000,
-        purificationScanIntervalMs: 100,
-        purificationFavorCost: 200,
-        waveGapSeconds: 300,
-        sendLeadSeconds: 30,
-        minimumSendLeadSeconds: 5,
-        destinationTravelMarginSeconds: 5,
-        cancellationWindowSeconds: 600,
-        cancellationSafetySeconds: 2,
-        scanIntervalMs: 1_000,
-        heartbeatIntervalMs: 50,
-        ajaxTimeoutMs: 12_000,
-        commandResolveTimeoutMs: 12_000,
-        mapCacheMs: 30 * 60_000,
-        maxDestinationPreviews: 20,
-        maximumRttMs: 2_000,
-        maximumTimerSlipMs: 500,
-        lockTtlMs: 10_000,
-        logLimit: 100,
+    VERSION = '2.3.0';
+
+    // ── DOIS PERFIS DE CONFIGURAÇÃO ──
+    CONFIGS = Object.freeze({
+        safe: {
+            returnOffsetMs: 3_500,
+            ncReturnOffsetMs: -2_500,
+            ncFallbackReturnOffsetMs: -4_000,
+            ncHighPrecisionUncertaintyMs: 150,
+            ncDurationToleranceMs: 11_000,
+            ncBaseTravelSeconds: 900,
+            ncDistanceFactor: 50,
+            ncSpeedModifiers: null,
+            militiaLeadMs: 3_000,
+            militiaLatencySafetyMs: 200,
+            militiaActiveMs: 3 * 60 * 60_000,
+            purificationScanIntervalMs: 100,
+            purificationFavorCost: 200,
+            waveGapSeconds: 300,
+            sendLeadSeconds: 45,
+            minimumSendLeadSeconds: 12,          // RECUSA envios com menos de 12s (evita tropas presas)
+            destinationTravelMarginSeconds: 8,
+            cancellationWindowSeconds: 600,
+            cancellationSafetySeconds: 5,
+            scanIntervalMs: 500,
+            heartbeatIntervalMs: 50,
+            ajaxTimeoutMs: 12_000,
+            commandResolveTimeoutMs: 12_000,
+            mapCacheMs: 30 * 60_000,
+            maxDestinationPreviews: 20,
+            maximumRttMs: 2_000,
+            maximumTimerSlipMs: 500,
+            lockTtlMs: 10_000,
+            logLimit: 100,
+        },
+        aggressive: {
+            returnOffsetMs: 1_000,
+            ncReturnOffsetMs: -100,
+            ncFallbackReturnOffsetMs: -1_000,
+            ncHighPrecisionUncertaintyMs: 75,
+            ncDurationToleranceMs: 11_000,
+            ncBaseTravelSeconds: 900,
+            ncDistanceFactor: 50,
+            ncSpeedModifiers: null,
+            militiaLeadMs: 1_000,
+            militiaLatencySafetyMs: 100,
+            militiaActiveMs: 3 * 60 * 60_000,
+            purificationScanIntervalMs: 100,
+            purificationFavorCost: 200,
+            waveGapSeconds: 300,
+            sendLeadSeconds: 30,
+            minimumSendLeadSeconds: 5,
+            destinationTravelMarginSeconds: 5,
+            cancellationWindowSeconds: 600,
+            cancellationSafetySeconds: 2,
+            scanIntervalMs: 1_000,
+            heartbeatIntervalMs: 50,
+            ajaxTimeoutMs: 12_000,
+            commandResolveTimeoutMs: 12_000,
+            mapCacheMs: 30 * 60_000,
+            maxDestinationPreviews: 20,
+            maximumRttMs: 2_000,
+            maximumTimerSlipMs: 500,
+            lockTtlMs: 10_000,
+            logLimit: 100,
+        }
     });
 
-    STORAGE_KEY = 'gd.runtime.v2';
-    LOCK_KEY = 'gd.tab-lock.v2';
-    MAP_KEY = 'gd.world-towns.v2';
+    get CONFIG() {
+        return this.CONFIGS[this._mode];
+    }
+
+    STORAGE_KEY = 'gd.runtime.v2.3';
+    LOCK_KEY = 'gd.tab-lock.v2.3';
+    MAP_KEY = 'gd.world-towns.v2.3';
     PREFIX = '[AutoDodge]';
     UI_PREFIX = 'dodge_';
 
@@ -54,6 +89,8 @@ var AutoDodge = class extends MultUtil {
     _scanTimer = null;
     _heartbeatTimer = null;
     _lastStatusUpdate = 0;
+    _mode = 'safe'; // Padrão: Modo Seguro
+
     _ownerId = null;
     _busy = false;
     _latencyMs = 100;
@@ -69,32 +106,68 @@ var AutoDodge = class extends MultUtil {
     constructor(c, s) {
         super(c, s);
         this._ownerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+        this._mode = this.storage.load('dodge_mode', 'safe');
+        
         if (this.storage.load('dodge_active', false)) {
             setTimeout(() => this.start(), 2000);
         }
     }
 
     settings = () => {
-        requestAnimationFrame(() => this._updateTitle());
+        requestAnimationFrame(() => {
+            this._updateTitle();
+            uw.$(document).off('change', '#dodge_mode_select').on('change', '#dodge_mode_select', (e) => {
+                this.changeMode(e.target.value);
+            });
+        });
+
+        const currentMode = this.storage.load('dodge_mode', 'safe');
+        const descText = currentMode === 'safe' 
+            ? 'Perfil SEGURO ativo: Recusa dodges desesperados (<12s) e dá margem real para as tropas regressarem.' 
+            : 'Perfil AGRESSIVO ativo: Tenta dodges à última da última. Alto risco de falha por latência.';
+
         return (
             '<div class="game_border" style="margin-bottom:20px;">' +
             '<div class="game_border_top"></div><div class="game_border_bottom"></div>' +
             '<div class="game_border_left"></div><div class="game_border_right"></div>' +
             '<div class="game_border_corner corner1"></div><div class="game_border_corner corner2"></div>' +
             '<div class="game_border_corner corner3"></div><div class="game_border_corner corner4"></div>' +
-            this.getTitleHtml(this.UI_PREFIX + 'title', 'Auto Dodge (Original)', this.toggle, '', this._active) +
-            '<div style="padding:5px 10px;font-weight:bold;font-size:11px;">' +
-            'Dodge preciso + snipe de NC + milícia + purificação automática.' +
+            this.getTitleHtml(this.UI_PREFIX + 'title', `Auto Dodge v${this.VERSION}`, this.toggle, '', this._active) +
+            
+            '<div style="padding:8px 10px;">' +
+            '<label style="font-size:11px; font-weight:bold; color:#5a3a0a; display:block; margin-bottom:4px;">Escolha o Perfil do Módulo:</label>' +
+            `<select id="dodge_mode_select" style="width:100%; padding:5px; font-size:11px; border:1px solid #8b7355; background:#2c1810; color:#d4c5a0; border-radius:3px; cursor:pointer;">` +
+            `<option value="safe" ${currentMode === 'safe' ? 'selected' : ''}>🛡️ Modo SEGURO (Recomendado: Margens largas, evita tropas presas)</option>` +
+            `<option value="aggressive" ${currentMode === 'aggressive' ? 'selected' : ''}>⚔️ Modo AGRESSIVO (Original: Margens mínimas, alto risco)</option>` +
+            `</select>` +
             '</div>' +
-            '<div style="padding:0 10px 4px;font-size:11px;color:#5a3a0a;">' +
-            'Envia apoio para voltar no <b>meio exato do caminho</b>. Offset: +1s pós-ataque / -0,1s pré-NC.' +
-            '</div>' +
+
+            '<div style="padding:5px 10px;font-size:11px;color:#5a3a0a; font-style:italic;">' + descText + '</div>' +
+
             '<div id="' + this.UI_PREFIX + 'status" style="padding:0 10px 6px;font-size:11px;color:#5a3a0a;">' +
             this._buildStatusHtml() +
             '</div>' +
             '<div id="' + this.UI_PREFIX + 'log" style="padding:2px 10px 8px;font-size:11px;color:#5a3a0a;min-height:16px;"></div>' +
             '</div>'
         );
+    };
+
+    changeMode = (newMode) => {
+        if (this._mode === newMode) return;
+        this._mode = newMode;
+        this.storage.save('dodge_mode', this._mode);
+        const modoTexto = this._mode === 'safe' ? 'Modo Seguro Ativo' : 'Modo Agressivo Ativo';
+        this._log('info', `Perfil alterado para: ${modoTexto}`);
+
+        if (this._active) {
+            this._log('warn', 'A reiniciar o módulo para aplicar o novo perfil...');
+            this.stop();
+            setTimeout(() => this.start(), 600);
+        }
+        try {
+            const container = uw.$('#' + this.UI_PREFIX + 'title').closest('.game_border');
+            if (container.length) container.replaceWith(this.settings());
+        } catch(e) {}
     };
 
     toggle = () => { if (this._active || this._starting) this.stop(); else this.start(); };
@@ -112,7 +185,10 @@ var AutoDodge = class extends MultUtil {
         if (!ready) { this._wantActive = false; this.storage.save('dodge_active', false); this._log('error', 'APIs internas do Grepolis não ficaram disponíveis; módulo parado.'); return; }
         if (!this._restored) { this._restored = true; this._restoreJobs(); }
         this._active = true; this.storage.save('dodge_active', true); this._updateTitle();
-        this._log('info', `AutoDodge v${this.VERSION} iniciado.`);
+        
+        const modoTexto = this._mode === 'safe' ? 'Modo Seguro Ativo' : 'Modo Agressivo Ativo';
+        this._log('info', `AutoDodge v${this.VERSION} iniciado (${modoTexto}).`);
+
         clearInterval(this._scanTimer); clearInterval(this._heartbeatTimer);
         this._lastHeartbeatAt = performance.now();
         this._scanTimer = setInterval(() => this._scan().catch((e) => this._log('error', `scan: ${e?.message ?? e}`)), this.CONFIG.scanIntervalMs);
@@ -142,8 +218,8 @@ var AutoDodge = class extends MultUtil {
     _buildStatusHtml() {
         const jobs = [...this._jobs.values()].filter((j) => ['scheduled', 'cancelling', 'done'].includes(j.stage));
         const militia = [...this._militiaJobs.values()].filter((j) => ['scheduled', 'activating', 'active'].includes(j.stage));
-        const purif = [...this._purificationJobs.values()].filter((j) => ['scheduled', 'casting', 'done'].includes(j.stage));
-        return `Latência: <b>${Math.round(this._latencyMs)} ms</b> · Apoios: <b>${jobs.length}</b> · Milícias: <b>${militia.length}</b> · Purificações: <b>${purif.length}</b>`;
+        const modoTexto = this._mode === 'safe' ? '🛡️ Modo Seguro' : '⚔️ Modo Agressivo';
+        return `Perfil: <b>${modoTexto}</b> · Latência: <b>${Math.round(this._latencyMs)} ms</b> · Apoios: <b>${jobs.length}</b> · Milícias: <b>${militia.length}</b>`;
     }
 
     _refreshSettingsStatus() {
@@ -415,11 +491,12 @@ var AutoDodge = class extends MultUtil {
 
     _persistJobs() {
         const plainJob = (job) => ({ ...job, commandIds: [...(job.commandIds || [])], attacks: (job.attacks || []).map((a) => ({ id: a.id, type: a.type, rawType: a.rawType, originTownId: a.originTownId, targetTownId: a.targetTownId, startedAt: a.startedAt, startedHasMilliseconds: a.startedHasMilliseconds, arrivalAt: a.arrivalAt, arrivalHasMilliseconds: a.arrivalHasMilliseconds, nc: a.nc })) });
-        this.storage.save(this.STORAGE_KEY, { version: this.VERSION, jobs: [...this._jobs.values()].map(plainJob), militiaJobs: [...this._militiaJobs.values()], purificationJobs: [...this._purificationJobs.values()] });
+        this.storage.save(this.STORAGE_KEY, { version: this.VERSION, mode: this._mode, jobs: [...this._jobs.values()].map(plainJob), militiaJobs: [...this._militiaJobs.values()], purificationJobs: [...this._purificationJobs.values()] });
     }
 
     _restoreJobs() {
         const stored = this.storage.load(this.STORAGE_KEY, {});
+        this._mode = stored.mode || 'safe';
         for (const raw of stored.jobs || []) { if (['scheduled', 'cancelling'].includes(raw.stage)) { const exists = this._movements().some((m) => m.id === String(raw.commandId) && !m.returning); raw.stage = exists ? 'scheduled' : 'blocked'; if (!exists) raw.error = 'command-missing-after-reload'; } this._jobs.set(raw.id, raw); }
         for (const raw of stored.militiaJobs || []) { if (raw.stage === 'activating') raw.stage = 'blocked'; if (raw.stage === 'active' && this._number(raw.activeUntil) <= this._serverNowMs()) raw.stage = 'expired'; this._militiaJobs.set(String(raw.townId), raw); }
         for (const raw of stored.purificationJobs || []) { if (['scheduled', 'casting'].includes(raw.stage)) { raw.stage = 'blocked'; raw.error = 'cast-status-unknown-after-reload'; } this._purificationJobs.set(String(raw.targetTownId), raw); }
@@ -593,14 +670,23 @@ var AutoDodge = class extends MultUtil {
             await this._ajaxPost('command_info', 'cancel_command', { id: this._integer(job.commandId), town_id: this._integer(job.sourceTownId) });
             const gone = await this._waitForCommandGone(job.commandId); if (!gone) throw new Error('O movimento não desapareceu após o cancelamento.');
             job.stage = 'done'; job.cancelledAt = requestAt + this._latencyMs / 2; job.expectedReturnAt = job.sentAt + 2 * (job.cancelledAt - job.sentAt);
-            this._log('info', `Apoio cancelado ${this.getTownName(job.sourceTownId)} → ${this.getTownName(job.destinationTownId)} (retorno esperado Δ=${Math.round(job.expectedReturnAt - job.desiredReturnAt)}ms)`);
+            
+            const deltaMs = Math.round(job.expectedReturnAt - job.desiredReturnAt);
+            const deltaSeg = (deltaMs / 1000).toFixed(1);
+            const sinal = deltaMs >= 0 ? '+' : '';
+            const horaRetorno = new Date(job.expectedReturnAt).toLocaleTimeString();
+            
+            this._log('info', `✓ Cancelado: ${this.getTownName(job.sourceTownId)} → ${this.getTownName(job.destinationTownId)} | Retorno às ${horaRetorno} | Diferença: ${sinal}${deltaSeg}s`);
         } catch (e) { job.stage = 'blocked'; job.error = e.message; this._log('error', `Cancelamento falhou (command ${job.commandId}): ${e.message}`); }
         this._persistJobs();
     }
 
     async _sendSupportLeg({ wave, source, destination, units, kind, referenceArrivalAt, returnOffsetMs, desiredReturnAt }) {
         const remainingSeconds = (wave.firstArrivalAt - this._serverNowMs()) / 1_000;
-        if (remainingSeconds < this.CONFIG.minimumSendLeadSeconds) { this._log('error', `Sem margem (${remainingSeconds.toFixed(1)}s) — ${kind} não enviado.`); return false; }
+        if (remainingSeconds < this.CONFIG.minimumSendLeadSeconds) { 
+            this._log('error', `✗ Dodge RECUSADO: Apenas ${remainingSeconds.toFixed(1)}s restantes (mínimo: ${this.CONFIG.minimumSendLeadSeconds}s). Tropas NÃO enviadas para evitar risco.`); 
+            return false; 
+        }
         const beforeIds = this._commandIds(); const requestStartedAt = this._serverNowMs(); let sendError = null;
         try { await this._ajaxPost('town_info', 'send_units', this._buildSupportPayload(source.id, destination.town.id, units)); }
         catch (e) { if (e.definitive) { this._log('warn', `Destino ${this.getTownName(destination.town.id)} rejeitou o ${kind}.`); return 'destination-rejected'; } sendError = e; }
@@ -613,7 +699,13 @@ var AutoDodge = class extends MultUtil {
         const feasible = this._cancellationFeasibility({ sentAt, cancelAt, outboundArrivalAt });
         const job = { ...wave, id: `${wave.id}:${kind}`, parentWaveId: wave.id, supportKind: kind, stage: feasible.allowed ? 'scheduled' : 'cancelling', sourceTownId: source.id, destinationTownId: destination.town.id, commandId: movement.id, sentAt, outboundArrivalAt, desiredReturnAt, returnOffsetMs, tactic: wave.ncArrivalAt ? 'nc-snipe' : 'dodge', ncConfidence: wave.ncConfidence || '', cancelAt, createdAt: this._serverNowMs() };
         this._jobs.set(job.id, job); this._persistJobs();
-        this._log('info', `${kind === 'naval' ? '⚓' : kind === 'land' ? '🛡️' : '⚔️'} ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} (${job.tactic}). Retorna às ${new Date(job.desiredReturnAt).toLocaleTimeString()}.`);
+        
+        const tempoAteAtaque = Math.round((wave.firstArrivalAt - Date.now()) / 1000);
+        const tempoAteRetorno = Math.round((job.desiredReturnAt - Date.now()) / 1000);
+        const offsetSeg = (job.returnOffsetMs / 1000).toFixed(1);
+        
+        this._log('info', `${kind === 'naval' ? '⚓' : kind === 'land' ? '🛡️' : '⚔️'} Dodge: ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} | Ataque em ${tempoAteAtaque}s | Retorno em ${tempoAteRetorno}s | Offset: ${offsetSeg}s | Tática: ${job.tactic.toUpperCase()}`);
+            
         if (!feasible.allowed) { job.stage = 'scheduled'; await this._cancelJob(job, feasible.reason); }
         return true;
     }
@@ -659,7 +751,13 @@ var AutoDodge = class extends MultUtil {
         const feasible = this._cancellationFeasibility({ sentAt, cancelAt, outboundArrivalAt });
         const job = { ...wave, stage: feasible.allowed ? 'scheduled' : 'cancelling', sourceTownId: source.id, destinationTownId: destination.town.id, commandId: movement.id, sentAt, outboundArrivalAt, desiredReturnAt: finalDesiredReturnAt, returnOffsetMs, tactic: wave.ncArrivalAt ? 'nc-snipe' : 'dodge', ncConfidence: wave.ncConfidence || '', cancelAt, createdAt: this._serverNowMs() };
         this._jobs.set(wave.id, job); this._persistJobs();
-        this._log('info', `${job.tactic === 'nc-snipe' ? '🎯' : '💨'} ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} · retorno ${new Date(job.desiredReturnAt).toLocaleTimeString()}`);
+        
+        const tempoAteAtaque = Math.round((wave.firstArrivalAt - Date.now()) / 1000);
+        const tempoAteRetorno = Math.round((job.desiredReturnAt - Date.now()) / 1000);
+        const offsetSeg = (job.returnOffsetMs / 1000).toFixed(1);
+        
+        this._log('info', `${job.tactic === 'nc-snipe' ? '🎯' : '💨'} Dodge: ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} | Ataque em ${tempoAteAtaque}s | Retorno em ${tempoAteRetorno}s | Offset: ${offsetSeg}s | Tática: ${job.tactic.toUpperCase()}`);
+            
         if (!feasible.allowed) { this._log('warn', `Viagem real inviável (${feasible.reason}) → cancelamento imediato.`); job.stage = 'scheduled'; await this._cancelJob(job, feasible.reason); }
     }
 
@@ -728,152 +826,3 @@ var AutoDodge = class extends MultUtil {
         this._refreshSettingsStatus();
     }
 };
-
-
-// ───────────────────────────────────────────────────────────────────────────
-// MÓDULO 2: AUTO DODGE SEGURO (Herdado do Original, mas com configs seguras)
-// ───────────────────────────────────────────────────────────────────────────
-var AutoDodgeSafe = class extends AutoDodge {
-    constructor(c, s) {
-        super(c, s); // Herda toda a lógica complexa do módulo original
-        
-        // Substitui APENAS as configurações e chaves para ser independente
-        this.VERSION = '2.1.0-Safe';
-        this.STORAGE_KEY = 'gd.runtime.v2_safe';
-        this.LOCK_KEY = 'gd.tab-lock.v2_safe';
-        this.MAP_KEY = 'gd.world-towns.v2_safe';
-        this.PREFIX = '[Dodge Seguro]';
-        this.UI_PREFIX = 'dodge_safe_';
-        
-        // Configurações de SEGURANÇA (Margens aumentadas para evitar tropas presas)
-        this.CONFIG = Object.freeze({
-            enabled: true,
-            returnOffsetMs: 3_500,               // AUMENTADO: Regressa 3.5s DEPOIS do ataque (em vez de 1s)
-            ncReturnOffsetMs: -2_500,            // AUMENTADO: Regressa 2.5s ANTES do NC (em vez de 0.1s)
-            ncFallbackReturnOffsetMs: -4_000,
-            ncHighPrecisionUncertaintyMs: 150,
-            ncDurationToleranceMs: 11_000,
-            ncBaseTravelSeconds: 900,
-            ncDistanceFactor: 50,
-            ncSpeedModifiers: null,
-            militiaLeadMs: 3_000,                // AUMENTADO: Ativa milícia com 3s de antecedência
-            militiaLatencySafetyMs: 200,
-            militiaActiveMs: 3 * 60 * 60_000,
-            purificationScanIntervalMs: 100,
-            purificationFavorCost: 200,
-            waveGapSeconds: 300,
-            sendLeadSeconds: 45,                 // AUMENTADO: Começa a planear com 45s de antecedência
-            minimumSendLeadSeconds: 12,          // AUMENTADO: RECUSA enviar se faltarem menos de 12s
-            destinationTravelMarginSeconds: 8,
-            cancellationWindowSeconds: 600,
-            cancellationSafetySeconds: 5,        // AUMENTADO: Dá 5s ao servidor para processar o cancelamento
-            scanIntervalMs: 500,
-            heartbeatIntervalMs: 50,
-            ajaxTimeoutMs: 12_000,
-            commandResolveTimeoutMs: 12_000,
-            mapCacheMs: 30 * 60_000,
-            maxDestinationPreviews: 20,
-            maximumRttMs: 2_000,
-            maximumTimerSlipMs: 500,
-            lockTtlMs: 10_000,
-            logLimit: 100,
-        });
-
-        // Override do estado ativo para usar a chave segura
-        if (this.storage.load('dodge_safe_active', false)) {
-            setTimeout(() => this.start(), 2000);
-        }
-    }
-
-    // Override da UI para usar os IDs únicos e texto explicativo
-    settings = () => {
-        requestAnimationFrame(() => this._updateTitle());
-        return (
-            '<div class="game_border" style="margin-bottom:20px; border-color: #2e7d32;">' +
-            '<div class="game_border_top"></div><div class="game_border_bottom"></div>' +
-            '<div class="game_border_left"></div><div class="game_border_right"></div>' +
-            '<div class="game_border_corner corner1"></div><div class="game_border_corner corner2"></div>' +
-            '<div class="game_border_corner corner3"></div><div class="game_border_corner corner4"></div>' +
-            this.getTitleHtml(this.UI_PREFIX + 'title', 'Auto Dodge (SEGURO)', this.toggle, '', this._active) +
-            '<div style="padding:5px 10px;font-weight:bold;font-size:11px; color:#2e7d32;">' +
-            'MODO SEGURO: Margens alargadas. Recusa envios com <12s. Previne tropas presas.' +
-            '</div>' +
-            '<div id="' + this.UI_PREFIX + 'status" style="padding:0 10px 6px;font-size:11px;color:#5a3a0a;">' +
-            this._buildStatusHtml() +
-            '</div>' +
-            '<div id="' + this.UI_PREFIX + 'log" style="padding:2px 10px 8px;font-size:11px;color:#5a3a0a;min-height:16px;"></div>' +
-            '</div>'
-        );
-    };
-
-    // Override dos métodos de UI e Log para usar o prefixo seguro
-    _updateTitle() {
-        const filter = this._active ? 'brightness(100%) saturate(186%) hue-rotate(120deg)' : ''; // Verde quando ativo
-        try { uw.$('#' + this.UI_PREFIX + 'title').css('filter', filter); } catch (e) {}
-    }
-
-    _buildStatusHtml() {
-        const jobs = [...this._jobs.values()].filter((j) => ['scheduled', 'cancelling', 'done'].includes(j.stage));
-        const militia = [...this._militiaJobs.values()].filter((j) => ['scheduled', 'activating', 'active'].includes(j.stage));
-        return `Perfil: <b>SEGURO</b> · Latência: <b>${Math.round(this._latencyMs)} ms</b> · Apoios: <b>${jobs.length}</b> · Milícias: <b>${militia.length}</b>`;
-    }
-
-    _log(level, message, details = {}) {
-        const icon = level === 'error' ? '✗' : level === 'warn' ? '⚠' : '·';
-        let diagnostic = '';
-        try { diagnostic = Object.keys(details).length ? ` ${JSON.stringify(details)}` : ''; } catch (e) { diagnostic = ' {"error":"details-unserializable"}'; }
-        this.console.log(`${this.PREFIX} ${icon} ${message}${diagnostic}`);
-        try {
-            const $log = uw.$('#' + this.UI_PREFIX + 'log');
-            if ($log.length) { const color = level === 'error' ? '#f87171' : level === 'warn' ? '#eab308' : '#1a6b2a'; $log.text(message).css('color', color); }
-        } catch (e) {}
-        try {
-            const history = this.storage.load(this.STORAGE_KEY + '_logs', []);
-            history.unshift({ at: Date.now(), level, message, details });
-            this.storage.save(this.STORAGE_KEY + '_logs', history.slice(0, this.CONFIG.logLimit));
-        } catch (e) {}
-    }
-
-    // Override do boot e stop para usar a chave de armazenamento segura
-    start() {
-        if (this._active || this._starting) return;
-        this._wantActive = true; this._starting = true;
-        this._boot().catch((e) => { this._starting = false; this._log('error', `boot: ${e?.message ?? e}`); });
-    }
-
-    async _boot() {
-        const ready = await this._waitForBindings(30_000);
-        this._starting = false;
-        if (!this._wantActive) return;
-        if (!ready) { this._wantActive = false; this.storage.save('dodge_safe_active', false); this._log('error', 'APIs internas do Grepolis não ficaram disponíveis; módulo parado.'); return; }
-        if (!this._restored) { this._restored = true; this._restoreJobs(); }
-        this._active = true; this.storage.save('dodge_safe_active', true); this._updateTitle();
-        this._log('info', `AutoDodge SEGURO v${this.VERSION} iniciado.`);
-        clearInterval(this._scanTimer); clearInterval(this._heartbeatTimer);
-        this._lastHeartbeatAt = performance.now();
-        this._scanTimer = setInterval(() => this._scan().catch((e) => this._log('error', `scan: ${e?.message ?? e}`)), this.CONFIG.scanIntervalMs);
-        this._heartbeatTimer = setInterval(() => this._heartbeat().catch((e) => this._log('error', `heartbeat: ${e?.message ?? e}`)), this.CONFIG.heartbeatIntervalMs);
-        this._scan().catch(() => {});
-    }
-
-    stop() {
-        this._wantActive = false; this._starting = false; this._active = false;
-        this.storage.save('dodge_safe_active', false);
-        clearInterval(this._scanTimer); clearInterval(this._heartbeatTimer);
-        this._scanTimer = null; this._heartbeatTimer = null;
-        this._updateTitle(); this._log('warn', 'AutoDodge SEGURO parado.');
-    }
-};
-
-// ══════════════════════════════════════════════════════════════════════════
-// REGISTO NO MULTBOT
-// Adiciona estas linhas no final do teu ficheiro auto_dodge.js ou onde o 
-// teu MultBot regista os módulos (geralmente no final do ficheiro principal).
-// ══════════════════════════════════════════════════════════════════════════
-
-// Regista o módulo original
-if (!window.modernBot) window.modernBot = {};
-window.modernBot.auto_dodge = new AutoDodge(console, typeof storage !== 'undefined' ? storage : {});
-
-// Regista o módulo SEGURO (independente)
-window.modernBot.auto_dodge_safe = new AutoDodgeSafe(console, typeof storage !== 'undefined' ? storage : {});
