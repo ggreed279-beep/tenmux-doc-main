@@ -1,16 +1,17 @@
 // ═════════════════════════════════════════════════════
-//  MODULE: AutoDodge v2.2.1 (Correção de Escopo do Menu)
+//  MODULE: AutoDodge v2.2.2 (Console Melhorada + Menu Fix)
 //  Engine portada do "Grepolis Dodge Silencioso" (Kelsiito)
 //  integrada ao MultBot (settings, toggle, console).
 //
-//  v2.2.1 — CORREÇÃO:
-//   • Removido o "onchange" inline do HTML (causava erro de escopo).
-//   • Adicionado listener jQuery (uw.$) para o menu. 
-//     Agora a mudança de perfil funciona perfeitamente.
+//  v2.2.2 — NOVIDADES NA CONSOLA:
+//   • "Modo Seguro Ativo" / "Modo Agressivo Ativo" em vez de SAFE/AGGRESSIVE.
+//   • Tempos detalhados no Dodge (Ataque em Xs, Retorno em Ys, Offset).
+//   • Log detalhado do Cancelamento (Hora exata do retorno e diferença).
+//   • Log claro quando o Dodge é recusado por falta de tempo.
 // ══════════════════════════════════════════════════════
 
 var AutoDodge = class extends MultUtil {
-    VERSION = '2.2.1';
+    VERSION = '2.2.2';
 
     // ── DOIS PERFIS DE CONFIGURAÇÃO ──
     CONFIGS = Object.freeze({
@@ -82,9 +83,9 @@ var AutoDodge = class extends MultUtil {
         return this.CONFIGS[this._mode];
     }
 
-    STORAGE_KEY = 'gd.runtime.v2.2.1';
-    LOCK_KEY = 'gd.tab-lock.v2.2.1';
-    MAP_KEY = 'gd.world-towns.v2.2.1';
+    STORAGE_KEY = 'gd.runtime.v2.2.2';
+    LOCK_KEY = 'gd.tab-lock.v2.2.2';
+    MAP_KEY = 'gd.world-towns.v2.2.2';
     PREFIX = '[AutoDodge]';
 
     _active = false;
@@ -125,7 +126,7 @@ var AutoDodge = class extends MultUtil {
     settings = () => {
         requestAnimationFrame(() => {
             this._updateTitle();
-            // CORREÇÃO: Usar jQuery para ouvir o menu, em vez de onchange inline
+            // Listener jQuery para o menu (corrige o erro de escopo)
             uw.$(document).off('change', '#dodge_mode_select').on('change', '#dodge_mode_select', (e) => {
                 if (window.modernBot && window.modernBot.autoDodge) {
                     window.modernBot.autoDodge.changeMode(e.target.value);
@@ -170,7 +171,8 @@ var AutoDodge = class extends MultUtil {
         
         this._mode = newMode;
         this.storage.save('dodge_mode', this._mode);
-        this._log('info', `Perfil alterado para: ${this._mode === 'safe' ? 'SEGURO' : 'AGRESSIVO'}`);
+        const modoTexto = this._mode === 'safe' ? 'Modo Seguro Ativo' : 'Modo Agressivo Ativo';
+        this._log('info', `Perfil alterado para: ${modoTexto}`);
 
         if (this._active) {
             this._log('warn', 'A reiniciar o módulo para aplicar o novo perfil...');
@@ -218,7 +220,9 @@ var AutoDodge = class extends MultUtil {
         this._active = true;
         this.storage.save('dodge_active', true);
         this._updateTitle();
-        this._log('info', `AutoDodge v${this.VERSION} iniciado (Perfil: ${this._mode.toUpperCase()}).`);
+        
+        const modoTexto = this._mode === 'safe' ? 'Modo Seguro Ativo' : 'Modo Agressivo Ativo';
+        this._log('info', `AutoDodge v${this.VERSION} iniciado (${modoTexto}).`);
 
         clearInterval(this._scanTimer);
         clearInterval(this._heartbeatTimer);
@@ -273,8 +277,9 @@ var AutoDodge = class extends MultUtil {
     _buildStatusHtml() {
         const jobs = [...this._jobs.values()].filter((j) => ['scheduled', 'cancelling', 'done'].includes(j.stage));
         const militia = [...this._militiaJobs.values()].filter((j) => ['scheduled', 'activating', 'active'].includes(j.stage));
+        const modoTexto = this._mode === 'safe' ? '️ Modo Seguro Ativo' : '️ Modo Agressivo Ativo';
         return (
-            `Perfil: <b>${this._mode === 'safe' ? '️ SEGURO' : '⚔️ AGRESSIVO'}</b> · ` +
+            `Perfil: <b>${modoTexto}</b> · ` +
             `Latência: <b>${Math.round(this._latencyMs)} ms</b> · ` +
             `Apoios: <b>${jobs.length}</b> · ` +
             `Milícias: <b>${militia.length}</b>`
@@ -902,7 +907,7 @@ var AutoDodge = class extends MultUtil {
     _ajaxGet(c, a, d) { return this._ajax('ajaxGet', c, a, d); }
     _ajaxPost(c, a, d) { return this._ajax('ajaxPost', c, a, d); }
 
-    // ═══════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════
     //  MUNDO / ATAQUES / NC
     // ═══════════════════════════════════════════════════
     async _loadWorldTowns() {
@@ -1063,7 +1068,7 @@ var AutoDodge = class extends MultUtil {
         return false;
     }
 
-    // ═══════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════
     //  MILÍCIA
     // ═══════════════════════════════════════════════════
     _townMilitiaActive(townId, now = this._serverNowMs()) {
@@ -1212,7 +1217,7 @@ var AutoDodge = class extends MultUtil {
         }
     }
 
-    // ══════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════
     //  CANCEL / ENVIO / JOB
     // ═══════════════════════════════════════════════════
     async _cancelJob(job, reason = 'scheduled') {
@@ -1230,9 +1235,15 @@ var AutoDodge = class extends MultUtil {
             job.stage = 'done';
             job.cancelledAt = requestAt + this._latencyMs / 2;
             job.expectedReturnAt = job.sentAt + 2 * (job.cancelledAt - job.sentAt);
+            
+            const deltaMs = Math.round(job.expectedReturnAt - job.desiredReturnAt);
+            const deltaSeg = (deltaMs / 1000).toFixed(1);
+            const sinal = deltaMs >= 0 ? '+' : '';
+            const horaRetorno = new Date(job.expectedReturnAt).toLocaleTimeString();
+            
             this._log('info',
-                `Apoio cancelado ${this.getTownName(job.sourceTownId)} → ${this.getTownName(job.destinationTownId)} ` +
-                `(retorno esperado Δ=${Math.round(job.expectedReturnAt - job.desiredReturnAt)}ms)`);
+                `✓ Cancelado: ${this.getTownName(job.sourceTownId)} → ${this.getTownName(job.destinationTownId)} | ` +
+                `Retorno às ${horaRetorno} | Diferença: ${sinal}${deltaSeg}s`);
         } catch (e) {
             job.stage = 'blocked';
             job.error = e.message;
@@ -1244,7 +1255,7 @@ var AutoDodge = class extends MultUtil {
     async _sendSupportLeg({ wave, source, destination, units, kind, referenceArrivalAt, returnOffsetMs, desiredReturnAt }) {
         const remainingSeconds = (wave.firstArrivalAt - this._serverNowMs()) / 1_000;
         if (remainingSeconds < this.CONFIG.minimumSendLeadSeconds) {
-            this._log('error', `Sem margem (${remainingSeconds.toFixed(1)}s) — ${kind} não enviado.`);
+            this._log('error', `✗ Dodge RECUSADO: Apenas ${remainingSeconds.toFixed(1)}s restantes (mínimo: ${this.CONFIG.minimumSendLeadSeconds}s). Tropas NÃO enviadas para evitar risco.`);
             return false;
         }
         const beforeIds = this._commandIds();
@@ -1294,9 +1305,16 @@ var AutoDodge = class extends MultUtil {
         };
         this._jobs.set(job.id, job);
         this._persistJobs();
+        
+        const tempoAteAtaque = Math.round((wave.firstArrivalAt - Date.now()) / 1000);
+        const tempoAteRetorno = Math.round((job.desiredReturnAt - Date.now()) / 1000);
+        const offsetSeg = (job.returnOffsetMs / 1000).toFixed(1);
+        
         this._log('info',
-            `${kind === 'naval' ? '' : kind === 'land' ? '️' : '⚔️'} ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} ` +
-            `(${job.tactic}). Retorna às ${new Date(job.desiredReturnAt).toLocaleTimeString()}.`);
+            `${kind === 'naval' ? '' : kind === 'land' ? '️' : '️'} Dodge: ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} | ` +
+            `Ataque em ${tempoAteAtaque}s | Retorno em ${tempoAteRetorno}s | Offset: ${offsetSeg}s | ` +
+            `Tática: ${job.tactic.toUpperCase()}`);
+            
         if (!feasible.allowed) {
             job.stage = 'scheduled';
             await this._cancelJob(job, feasible.reason);
@@ -1412,9 +1430,16 @@ var AutoDodge = class extends MultUtil {
         };
         this._jobs.set(wave.id, job);
         this._persistJobs();
+        
+        const tempoAteAtaque = Math.round((wave.firstArrivalAt - Date.now()) / 1000);
+        const tempoAteRetorno = Math.round((job.desiredReturnAt - Date.now()) / 1000);
+        const offsetSeg = (job.returnOffsetMs / 1000).toFixed(1);
+        
         this._log('info',
-            `${job.tactic === 'nc-snipe' ? '🎯' : '💨'} ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} · ` +
-            `retorno ${new Date(job.desiredReturnAt).toLocaleTimeString()}`);
+            `${job.tactic === 'nc-snipe' ? '🎯' : '💨'} Dodge: ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} | ` +
+            `Ataque em ${tempoAteAtaque}s | Retorno em ${tempoAteRetorno}s | Offset: ${offsetSeg}s | ` +
+            `Tática: ${job.tactic.toUpperCase()}`);
+            
         if (!feasible.allowed) {
             this._log('warn', `Viagem real inviável (${feasible.reason}) → cancelamento imediato.`);
             job.stage = 'scheduled';
