@@ -1,40 +1,39 @@
-// ══════════════════════════════════════════════════════
-//  MODULE: AutoDodge v2.2.0 (Perfil Selecionável)
+// ═════════════════════════════════════════════════════
+//  MODULE: AutoDodge v2.2.1 (Correção de Escopo do Menu)
 //  Engine portada do "Grepolis Dodge Silencioso" (Kelsiito)
 //  integrada ao MultBot (settings, toggle, console).
 //
-//  v2.2.0 — NOVIDADE: Menu de Seleção de Perfil!
-//   • Escolhe entre "SEGURO" ou "AGRESSIVO" no menu.
-//   • O script guarda a tua escolha e usa-a ao ativar.
-//   • Se mudares de perfil com o módulo ligado, ele reinicia 
-//     automaticamente para aplicar as novas regras.
+//  v2.2.1 — CORREÇÃO:
+//   • Removido o "onchange" inline do HTML (causava erro de escopo).
+//   • Adicionado listener jQuery (uw.$) para o menu. 
+//     Agora a mudança de perfil funciona perfeitamente.
 // ══════════════════════════════════════════════════════
 
 var AutoDodge = class extends MultUtil {
-    VERSION = '2.2.0';
+    VERSION = '2.2.1';
 
     // ── DOIS PERFIS DE CONFIGURAÇÃO ──
     CONFIGS = Object.freeze({
         safe: {
-            returnOffsetMs: 3_500,               // Regressa 3.5s DEPOIS do ataque (muito mais seguro)
-            ncReturnOffsetMs: -2_500,            // Regressa 2.5s ANTES do NC (margem contra lag)
-            ncFallbackReturnOffsetMs: -4_000,    // Fallback de 4s antes do NC
+            returnOffsetMs: 3_500,
+            ncReturnOffsetMs: -2_500,
+            ncFallbackReturnOffsetMs: -4_000,
             ncHighPrecisionUncertaintyMs: 150,
             ncDurationToleranceMs: 11_000,
             ncBaseTravelSeconds: 900,
             ncDistanceFactor: 50,
             ncSpeedModifiers: null,
-            militiaLeadMs: 4_000,                // Ativa milícia 4s antes (garante proteção)
+            militiaLeadMs: 4_000,
             militiaLatencySafetyMs: 200,
             militiaActiveMs: 3 * 60 * 60_000,
             purificationScanIntervalMs: 100,
             purificationFavorCost: 200,
             waveGapSeconds: 300,
-            sendLeadSeconds: 45,                 // Começa a planear com 45s de antecedência
-            minimumSendLeadSeconds: 12,          // RECUSA enviar se faltarem menos de 12s
+            sendLeadSeconds: 45,
+            minimumSendLeadSeconds: 12,
             destinationTravelMarginSeconds: 8,
             cancellationWindowSeconds: 600,
-            cancellationSafetySeconds: 5,        // Margem de 5s para o cancelamento
+            cancellationSafetySeconds: 5,
             scanIntervalMs: 500,
             heartbeatIntervalMs: 50,
             ajaxTimeoutMs: 12_000,
@@ -79,17 +78,15 @@ var AutoDodge = class extends MultUtil {
         }
     });
 
-    // Getter dinâmico: usa a configuração do perfil escolhido
     get CONFIG() {
         return this.CONFIGS[this._mode];
     }
 
-    STORAGE_KEY = 'gd.runtime.v2.2';
-    LOCK_KEY = 'gd.tab-lock.v2.2';
-    MAP_KEY = 'gd.world-towns.v2.2';
+    STORAGE_KEY = 'gd.runtime.v2.2.1';
+    LOCK_KEY = 'gd.tab-lock.v2.2.1';
+    MAP_KEY = 'gd.world-towns.v2.2.1';
     PREFIX = '[AutoDodge]';
 
-    // ── MultBot state ──
     _active = false;
     _starting = false;
     _wantActive = false;
@@ -97,9 +94,8 @@ var AutoDodge = class extends MultUtil {
     _scanTimer = null;
     _heartbeatTimer = null;
     _lastStatusUpdate = 0;
-    _mode = 'safe'; // 'safe' ou 'aggressive'
+    _mode = 'safe';
 
-    // ── Advanced engine state ──
     _ownerId = null;
     _busy = false;
     _latencyMs = 100;
@@ -115,7 +111,6 @@ var AutoDodge = class extends MultUtil {
     constructor(c, s) {
         super(c, s);
         this._ownerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
-        // Carrega o perfil salvo nas definições (padrão: 'safe')
         this._mode = this.storage.load('dodge_mode', 'safe');
         
         if (this.storage.load('dodge_active', false)) {
@@ -128,7 +123,16 @@ var AutoDodge = class extends MultUtil {
     // ═══════════════════════════════════════════════════
 
     settings = () => {
-        requestAnimationFrame(() => this._updateTitle());
+        requestAnimationFrame(() => {
+            this._updateTitle();
+            // CORREÇÃO: Usar jQuery para ouvir o menu, em vez de onchange inline
+            uw.$(document).off('change', '#dodge_mode_select').on('change', '#dodge_mode_select', (e) => {
+                if (window.modernBot && window.modernBot.autoDodge) {
+                    window.modernBot.autoDodge.changeMode(e.target.value);
+                }
+            });
+        });
+
         const currentMode = this.storage.load('dodge_mode', 'safe');
 
         return (
@@ -141,9 +145,9 @@ var AutoDodge = class extends MultUtil {
             
             '<div style="padding:8px 10px;">' +
             '<label style="font-size:11px; font-weight:bold; color:#5a3a0a; display:block; margin-bottom:4px;">Escolha o Perfil do Módulo:</label>' +
-            `<select id="dodge_mode_select" onchange="window.modernBot.autoDodge.changeMode(this.value)" style="width:100%; padding:5px; font-size:11px; border:1px solid #8b7355; background:#2c1810; color:#d4c5a0; border-radius:3px; cursor:pointer;">` +
+            `<select id="dodge_mode_select" style="width:100%; padding:5px; font-size:11px; border:1px solid #8b7355; background:#2c1810; color:#d4c5a0; border-radius:3px; cursor:pointer;">` +
             `<option value="safe" ${currentMode === 'safe' ? 'selected' : ''}>🛡️ Modo SEGURO (Recomendado: Margens largas, evita tropas presas)</option>` +
-            `<option value="aggressive" ${currentMode === 'aggressive' ? 'selected' : ''}>⚔️ Modo AGRESSIVO (Original: Margens mínimas, alto risco)</option>` +
+            `<option value="aggressive" ${currentMode === 'aggressive' ? 'selected' : ''}>️ Modo AGRESSIVO (Original: Margens mínimas, alto risco)</option>` +
             `</select>` +
             '</div>' +
 
@@ -161,7 +165,6 @@ var AutoDodge = class extends MultUtil {
         );
     };
 
-    // Função chamada quando mudas o perfil no menu
     changeMode = (newMode) => {
         if (this._mode === newMode) return;
         
@@ -169,14 +172,12 @@ var AutoDodge = class extends MultUtil {
         this.storage.save('dodge_mode', this._mode);
         this._log('info', `Perfil alterado para: ${this._mode === 'safe' ? 'SEGURO' : 'AGRESSIVO'}`);
 
-        // Se o módulo estiver ligado, reinicia-o automaticamente para aplicar as novas regras
         if (this._active) {
             this._log('warn', 'A reiniciar o módulo para aplicar o novo perfil...');
             this.stop();
             setTimeout(() => this.start(), 600);
         }
 
-        // Atualiza a interface visual
         try {
             const container = uw.$('#dodge_title').closest('.game_border');
             if (container.length) {
@@ -273,7 +274,7 @@ var AutoDodge = class extends MultUtil {
         const jobs = [...this._jobs.values()].filter((j) => ['scheduled', 'cancelling', 'done'].includes(j.stage));
         const militia = [...this._militiaJobs.values()].filter((j) => ['scheduled', 'activating', 'active'].includes(j.stage));
         return (
-            `Perfil: <b>${this._mode === 'safe' ? '🛡️ SEGURO' : '⚔️ AGRESSIVO'}</b> · ` +
+            `Perfil: <b>${this._mode === 'safe' ? '️ SEGURO' : '⚔️ AGRESSIVO'}</b> · ` +
             `Latência: <b>${Math.round(this._latencyMs)} ms</b> · ` +
             `Apoios: <b>${jobs.length}</b> · ` +
             `Milícias: <b>${militia.length}</b>`
@@ -706,7 +707,7 @@ var AutoDodge = class extends MultUtil {
 
     // ═══════════════════════════════════════════════════
     //  PAGE DATA
-    // ═══════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════
     _serverNowMs() {
         try {
             const calibrated = this._calibratedServerTime(uw.Timestamp?.server?.(), performance.now());
@@ -1211,7 +1212,7 @@ var AutoDodge = class extends MultUtil {
         }
     }
 
-    // ═══════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════
     //  CANCEL / ENVIO / JOB
     // ═══════════════════════════════════════════════════
     async _cancelJob(job, reason = 'scheduled') {
@@ -1294,7 +1295,7 @@ var AutoDodge = class extends MultUtil {
         this._jobs.set(job.id, job);
         this._persistJobs();
         this._log('info',
-            `${kind === 'naval' ? '⚓' : kind === 'land' ? '🛡️' : '⚔️'} ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} ` +
+            `${kind === 'naval' ? '' : kind === 'land' ? '️' : '⚔️'} ${this.getTownName(source.id)} → ${this.getTownName(destination.town.id)} ` +
             `(${job.tactic}). Retorna às ${new Date(job.desiredReturnAt).toLocaleTimeString()}.`);
         if (!feasible.allowed) {
             job.stage = 'scheduled';
