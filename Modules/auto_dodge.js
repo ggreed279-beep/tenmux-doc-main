@@ -1,17 +1,17 @@
 // ══════════════════════════════════════════════════════
-//  MODULE: AutoDodge v2.1.0 (Dual Mode: Safe / Aggressive)
+//  MODULE: AutoDodge v2.2.0 (Perfil Selecionável)
 //  Engine portada do "Grepolis Dodge Silencioso" (Kelsiito)
 //  integrada ao MultBot (settings, toggle, console).
 //
-//  v2.1.0 — NOVIDADE: Dois perfis de configuração!
-//   • MODO SEGURO (Padrão): Margens de tempo alargadas. 
-//     Evita que as tropas fiquem presas ou falhem por latência.
-//   • MODO AGRESSIVO: O original. Margens mínimas (alto risco).
-//   • Botão no painel para alternar entre os modos instantaneamente.
+//  v2.2.0 — NOVIDADE: Menu de Seleção de Perfil!
+//   • Escolhe entre "SEGURO" ou "AGRESSIVO" no menu.
+//   • O script guarda a tua escolha e usa-a ao ativar.
+//   • Se mudares de perfil com o módulo ligado, ele reinicia 
+//     automaticamente para aplicar as novas regras.
 // ══════════════════════════════════════════════════════
 
 var AutoDodge = class extends MultUtil {
-    VERSION = '2.1.0';
+    VERSION = '2.2.0';
 
     // ── DOIS PERFIS DE CONFIGURAÇÃO ──
     CONFIGS = Object.freeze({
@@ -24,18 +24,18 @@ var AutoDodge = class extends MultUtil {
             ncBaseTravelSeconds: 900,
             ncDistanceFactor: 50,
             ncSpeedModifiers: null,
-            militiaLeadMs: 4_000,                // Ativa milícia 4s antes (garante proteção se o dodge falhar)
+            militiaLeadMs: 4_000,                // Ativa milícia 4s antes (garante proteção)
             militiaLatencySafetyMs: 200,
             militiaActiveMs: 3 * 60 * 60_000,
             purificationScanIntervalMs: 100,
             purificationFavorCost: 200,
             waveGapSeconds: 300,
             sendLeadSeconds: 45,                 // Começa a planear com 45s de antecedência
-            minimumSendLeadSeconds: 12,          // RECUSA enviar se faltarem menos de 12s (evita dodges desesperados)
+            minimumSendLeadSeconds: 12,          // RECUSA enviar se faltarem menos de 12s
             destinationTravelMarginSeconds: 8,
             cancellationWindowSeconds: 600,
-            cancellationSafetySeconds: 5,        // Margem de 5s para o cancelamento ser processado
-            scanIntervalMs: 500,                 // Scan mais rápido para compensar o planeamento antecipado
+            cancellationSafetySeconds: 5,        // Margem de 5s para o cancelamento
+            scanIntervalMs: 500,
             heartbeatIntervalMs: 50,
             ajaxTimeoutMs: 12_000,
             commandResolveTimeoutMs: 12_000,
@@ -79,14 +79,14 @@ var AutoDodge = class extends MultUtil {
         }
     });
 
-    // Getter dinâmico: usa a configuração do modo atual
+    // Getter dinâmico: usa a configuração do perfil escolhido
     get CONFIG() {
         return this.CONFIGS[this._mode];
     }
 
-    STORAGE_KEY = 'gd.runtime.v2.1';
-    LOCK_KEY = 'gd.tab-lock.v2.1';
-    MAP_KEY = 'gd.world-towns.v2.1';
+    STORAGE_KEY = 'gd.runtime.v2.2';
+    LOCK_KEY = 'gd.tab-lock.v2.2';
+    MAP_KEY = 'gd.world-towns.v2.2';
     PREFIX = '[AutoDodge]';
 
     // ── MultBot state ──
@@ -115,7 +115,8 @@ var AutoDodge = class extends MultUtil {
     constructor(c, s) {
         super(c, s);
         this._ownerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
-        this._mode = this.storage.load('dodge_mode', 'safe'); // Carrega o modo salvo
+        // Carrega o perfil salvo nas definições (padrão: 'safe')
+        this._mode = this.storage.load('dodge_mode', 'safe');
         
         if (this.storage.load('dodge_active', false)) {
             setTimeout(() => this.start(), 2000);
@@ -128,12 +129,7 @@ var AutoDodge = class extends MultUtil {
 
     settings = () => {
         requestAnimationFrame(() => this._updateTitle());
-        const isSafe = this._mode === 'safe';
-        const modeText = isSafe ? 'SEGURO (Recomendado)' : 'AGRESSIVO (Original)';
-        const modeColor = isSafe ? '#2e7d32' : '#c62828';
-        const descText = isSafe 
-            ? 'Margens de tempo alargadas. Recusa dodges desesperados (<12s). Evita que as tropas fiquem presas.' 
-            : 'Margens mínimas. Alto risco de falha por latência. As tropas podem não ter tempo de recuar.';
+        const currentMode = this.storage.load('dodge_mode', 'safe');
 
         return (
             '<div class="game_border" style="margin-bottom:20px;">' +
@@ -142,12 +138,21 @@ var AutoDodge = class extends MultUtil {
             '<div class="game_border_corner corner1"></div><div class="game_border_corner corner2"></div>' +
             '<div class="game_border_corner corner3"></div><div class="game_border_corner corner4"></div>' +
             this.getTitleHtml('dodge_title', `Auto Dodge v${this.VERSION}`, this.toggle, '', this._active) +
-            '<div style="padding:5px 10px;">' +
-            `<button class="btn btn-default" onclick="window.modernBot.autoDodge.toggleMode()" style="font-size:11px; padding:4px 8px; border:1px solid #8b7355; background:#3d2b1f; color:#d4c5a0; cursor:pointer; border-radius:3px;">` +
-            `⚙️ Alternar Modo: <span style="color:${modeColor}; font-weight:bold;">${modeText}</span>` +
-            `</button>` +
+            
+            '<div style="padding:8px 10px;">' +
+            '<label style="font-size:11px; font-weight:bold; color:#5a3a0a; display:block; margin-bottom:4px;">Escolha o Perfil do Módulo:</label>' +
+            `<select id="dodge_mode_select" onchange="window.modernBot.autoDodge.changeMode(this.value)" style="width:100%; padding:5px; font-size:11px; border:1px solid #8b7355; background:#2c1810; color:#d4c5a0; border-radius:3px; cursor:pointer;">` +
+            `<option value="safe" ${currentMode === 'safe' ? 'selected' : ''}>🛡️ Modo SEGURO (Recomendado: Margens largas, evita tropas presas)</option>` +
+            `<option value="aggressive" ${currentMode === 'aggressive' ? 'selected' : ''}>⚔️ Modo AGRESSIVO (Original: Margens mínimas, alto risco)</option>` +
+            `</select>` +
             '</div>' +
-            '<div style="padding:5px 10px;font-size:11px;color:#5a3a0a; font-style:italic;">' + descText + '</div>' +
+
+            '<div style="padding:5px 10px;font-size:11px;color:#5a3a0a; font-style:italic;">' +
+            (currentMode === 'safe' 
+                ? 'Perfil SEGURO ativo: Recusa dodges desesperados (<12s) e dá margem real para as tropas regressarem.' 
+                : 'Perfil AGRESSIVO ativo: Tenta dodges à última da última. Alto risco de falha por latência.') +
+            '</div>' +
+
             '<div id="dodge_status" style="padding:0 10px 6px;font-size:11px;color:#5a3a0a;">' +
             this._buildStatusHtml() +
             '</div>' +
@@ -156,12 +161,22 @@ var AutoDodge = class extends MultUtil {
         );
     };
 
-    toggleMode = () => {
-        this._mode = this._mode === 'safe' ? 'aggressive' : 'safe';
-        this.storage.save('dodge_mode', this._mode);
-        this._log('info', `Modo alterado para: ${this._mode === 'safe' ? 'SEGURO' : 'AGRESSIVO'}`);
+    // Função chamada quando mudas o perfil no menu
+    changeMode = (newMode) => {
+        if (this._mode === newMode) return;
         
-        // Re-renderiza a UI
+        this._mode = newMode;
+        this.storage.save('dodge_mode', this._mode);
+        this._log('info', `Perfil alterado para: ${this._mode === 'safe' ? 'SEGURO' : 'AGRESSIVO'}`);
+
+        // Se o módulo estiver ligado, reinicia-o automaticamente para aplicar as novas regras
+        if (this._active) {
+            this._log('warn', 'A reiniciar o módulo para aplicar o novo perfil...');
+            this.stop();
+            setTimeout(() => this.start(), 600);
+        }
+
+        // Atualiza a interface visual
         try {
             const container = uw.$('#dodge_title').closest('.game_border');
             if (container.length) {
@@ -202,7 +217,7 @@ var AutoDodge = class extends MultUtil {
         this._active = true;
         this.storage.save('dodge_active', true);
         this._updateTitle();
-        this._log('info', `AutoDodge v${this.VERSION} iniciado (Modo: ${this._mode.toUpperCase()}).`);
+        this._log('info', `AutoDodge v${this.VERSION} iniciado (Perfil: ${this._mode.toUpperCase()}).`);
 
         clearInterval(this._scanTimer);
         clearInterval(this._heartbeatTimer);
@@ -257,9 +272,8 @@ var AutoDodge = class extends MultUtil {
     _buildStatusHtml() {
         const jobs = [...this._jobs.values()].filter((j) => ['scheduled', 'cancelling', 'done'].includes(j.stage));
         const militia = [...this._militiaJobs.values()].filter((j) => ['scheduled', 'activating', 'active'].includes(j.stage));
-        const purif = [...this._purificationJobs.values()].filter((j) => ['scheduled', 'casting', 'done'].includes(j.stage));
         return (
-            `Modo: <b>${this._mode === 'safe' ? 'SEGURO' : 'AGRESSIVO'}</b> · ` +
+            `Perfil: <b>${this._mode === 'safe' ? '🛡️ SEGURO' : '⚔️ AGRESSIVO'}</b> · ` +
             `Latência: <b>${Math.round(this._latencyMs)} ms</b> · ` +
             `Apoios: <b>${jobs.length}</b> · ` +
             `Milícias: <b>${militia.length}</b>`
@@ -302,7 +316,7 @@ var AutoDodge = class extends MultUtil {
     }
 
     // ═══════════════════════════════════════════════════
-    //  HELPERS NUMÉRICOS / TEMPO (Core portado)
+    //  HELPERS NUMÉRICOS / TEMPO
     // ═══════════════════════════════════════════════════
     _number(value, fallback = 0) {
         const parsed = Number(value);
@@ -825,7 +839,7 @@ var AutoDodge = class extends MultUtil {
 
     _restoreJobs() {
         const stored = this.storage.load(this.STORAGE_KEY, {});
-        this._mode = stored.mode || 'safe'; // Restaura o modo
+        this._mode = stored.mode || 'safe';
         for (const raw of stored.jobs || []) {
             if (['scheduled', 'cancelling'].includes(raw.stage)) {
                 const exists = this._movements().some((m) => m.id === String(raw.commandId) && !m.returning);
